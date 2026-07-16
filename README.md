@@ -40,7 +40,7 @@ Every auto-rotating thumbnail on a page draws through **one shared WebGL context
 
 ## Requirements
 
-- Cactus core **v0.5.464** or newer (which is where `three` enters core's dependencies).
+- Cactus core **v0.5.465** or newer (which is where `three` enters core's dependencies).
 - The shop module **v0.1.43** or newer (which is where `shop.gallery-media` arrives).
 - A media provider configured under **Settings › Media** - models are stored the same way images are.
 
