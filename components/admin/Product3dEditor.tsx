@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { P3D_ACCEPT, P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
+import { uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
 import type { P3dAdminModel, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 
 const css = `
@@ -65,16 +66,14 @@ export function Product3dEditor({ productId }: { productId: string }) {
   async function upload(file: File) {
     setUploading(true)
     setError(null)
-    const body = new FormData()
-    body.append('file', file)
-    body.append('targetProductId', target)
-    const res = await fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/models`, { method: 'POST', body })
-    setUploading(false)
-    if (!res.ok) {
-      setError((await res.json().catch(() => ({}))).error ?? 'Upload failed')
-      return
+    try {
+      await uploadModel(file, { productId, targetProductId: target })
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'That model could not be uploaded.')
+    } finally {
+      setUploading(false)
     }
-    await refresh()
   }
 
   async function remove(id: string) {

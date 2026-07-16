@@ -1,3 +1,5 @@
+import { MAX_DIRECT_UPLOAD_BYTES, MAX_DIRECT_UPLOAD_MB, modelTypeForExtension } from '@/lib/media/limits'
+
 // The formats this module accepts, and the only place that decides so. Shared by
 // the upload route (server) and the file picker (browser), so what the admin is
 // offered and what the server will take can never drift apart.
@@ -41,15 +43,40 @@ export function formatFromFilename(filename: string): P3dFormat | null {
 // the right files rather than everything on the disk.
 export const P3D_ACCEPT = P3D_FORMATS.map((f) => `.${f}`).join(',')
 
-// Stored against the blob. Deliberately generic: see the note above on why the
-// real content type of a 3D file is not a thing worth asserting.
-export const P3D_UPLOAD_MIME = 'application/octet-stream'
+/**
+ * The media type a model of this format is stored under.
+ *
+ * These used to all be `application/octet-stream`, on the reasoning that a 3D
+ * file's real content type is not worth asserting. That reasoning was sound and
+ * the conclusion was still wrong: core builds an object key's extension from the
+ * type, so every model landed under a `.octet-stream` key, and a key whose
+ * extension names no type is a key the media Worker will not accept - it reads
+ * the type back out of the extension, that being the only claim about an upload a
+ * client cannot forge. The type is not a description of the bytes here so much as
+ * the thing that carries the extension.
+ *
+ * Core owns the mapping (MODEL_EXTENSION_TYPES in lib/media/limits.ts) because the
+ * Worker mirrors it. A format core has never heard of throws rather than falling
+ * back to a "close enough" type: the upload would be signed under a key nothing
+ * could type, and it would fail at the Worker with something far less obvious than
+ * this.
+ */
+export function mimeForFormat(format: P3dFormat): string {
+  const mime = modelTypeForExtension(format)
+  if (!mime) throw new Error(`No media type is registered for .${format} files`)
+  return mime
+}
 
 // A 3D model is a large file by web standards - a detailed FBX runs to tens of
 // megabytes - but it is also downloaded by every shopper who opens the product,
 // so this is as much a kindness to the shopper as a guard on the bucket.
-export const P3D_MAX_UPLOAD_MB = 50
-export const P3D_MAX_UPLOAD_BYTES = P3D_MAX_UPLOAD_MB * 1024 * 1024
+//
+// Matched to core's MAX_DIRECT_UPLOAD_BYTES, which is the real ceiling: a model
+// goes straight to the media Worker, and the Worker will not take more than that.
+// Promising more here than the Worker accepts is how this number came to be a lie
+// in the first place.
+export const P3D_MAX_UPLOAD_BYTES = MAX_DIRECT_UPLOAD_BYTES
+export const P3D_MAX_UPLOAD_MB = MAX_DIRECT_UPLOAD_MB
 
 export function formatLabel(format: P3dFormat): string {
   return format === 'gltf' ? 'glTF' : format.toUpperCase()

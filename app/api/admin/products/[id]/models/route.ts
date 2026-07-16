@@ -1,21 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
-import { getOrCreateFolderByPath, resolveFolderPath } from '@/lib/media/organise'
+import { resolveFolderPath } from '@/lib/media/organise'
 import { saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
+import { verifyUploadToken } from '@/lib/media/upload-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
-import { getProductMediaFolderId } from '@/modules/shop/lib/media/product-media'
 import { createModel, getAdminModels, getTargets, isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
+import { resolve3dFolderId } from '@/modules/product-3d-views-for-shop/lib/media-folder'
 import {
   P3D_MAX_UPLOAD_BYTES,
   P3D_MAX_UPLOAD_MB,
-  P3D_UPLOAD_MIME,
   formatFromFilename,
+  mimeForFormat,
 } from '@/modules/product-3d-views-for-shop/lib/formats'
 
-// The editor's list of a product's 3D models, and where a new one is uploaded.
+// The editor's list of a product's 3D models, and where a new one is recorded.
 // `id` is always the PARENT product; which of it or its variations a model is for
 // travels as `targetProductId` in the body, checked against the parent's own tree
 // below rather than trusted.
+//
+// POST takes two shapes:
+//   - JSON, the second half of a direct upload. The bytes are already in storage
+//     (see ./upload-url); this only writes the rows. The normal path.
+//   - multipart, the fallback for installs whose provider cannot take a browser's
+//     PUT. The bytes come through this function, which means the platform's ~4.5 MB
+//     body cap applies and most real models will not fit. The client says so
+//     before it tries, rather than letting the platform swallow the request.
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireShopUser('shop.products')
@@ -24,25 +33,6 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params
   const [models, targets] = await Promise.all([getAdminModels(id), getTargets(id)])
   return NextResponse.json({ models, targets })
-}
-
-/**
- * The library folder a product's 3D files belong in: Shop / <master category> /
- * <product> / 3d - the product's own image folder, with a `3d` subfolder so the
- * models sit beside the pictures they belong to rather than in a parallel tree
- * the site owner has to go looking for.
- *
- * A variation's model is filed under the PARENT's folder, not the hidden child
- * product's: shop already does exactly this for variant images (the
- * `folderProductId` option), and a child product's folder would be named after a
- * row the site owner is never shown.
- */
-async function resolve3dFolderId(parentProductId: string): Promise<string | null> {
-  const productFolderId = await getProductMediaFolderId(parentProductId)
-  if (productFolderId === null) return null
-  const path = await resolveFolderPath(productFolderId)
-  if (!path) return null
-  return getOrCreateFolderByPath([...path.split('/'), '3d'])
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -56,6 +46,98 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: 'Media storage is not set up yet. Add a provider in Settings → Media first.' }, { status: 503 })
   }
 
+  return request.headers.get('content-type')?.includes('application/json')
+    ? recordDirect(request, id, provider, gate.user.id)
+    : uploadThroughServer(request, id, provider, gate.user.id)
+}
+
+type Provider = NonNullable<Awaited<ReturnType<typeof getActiveMediaProvider>>>
+
+/**
+ * Record a model whose bytes the browser already PUT to the Worker.
+ *
+ * Nothing identifying the object is taken at face value. The caller hands back the
+ * token this module signed for this exact key, and the format is read from the
+ * key's own extension rather than from the filename beside it - the key is what
+ * the signature covers, so it is the only claim here that cannot be edited in
+ * flight. Same reasoning as core's /api/admin/media/record.
+ */
+async function recordDirect(request: NextRequest, id: string, provider: Provider, userId: string) {
+  const body = await request.json().catch(() => null)
+  const key = typeof body?.key === 'string' ? body.key : ''
+  const token = typeof body?.token === 'string' ? body.token : ''
+  const filename = typeof body?.filename === 'string' ? body.filename : ''
+  const sizeBytes = typeof body?.sizeBytes === 'number' ? body.sizeBytes : NaN
+  const rawTarget = body?.targetProductId
+  const targetProductId = typeof rawTarget === 'string' && rawTarget ? rawTarget : id
+
+  if (!(await isValidTarget(id, targetProductId))) {
+    return NextResponse.json({ error: 'That variation does not belong to this product.' }, { status: 400 })
+  }
+
+  // The key must sit under this provider's own namespace - the shape buildKey()
+  // produced for /upload-url. B2 keeps the legacy prefix-less form.
+  const expectedPrefix = provider === 'B2' ? 'media/' : `media/${provider}/`
+  if (!key.startsWith(expectedPrefix)) {
+    return NextResponse.json({ error: 'Invalid object key' }, { status: 400 })
+  }
+
+  // Proof this key is one we handed out this session, still within its short life
+  // - the same signature the Worker checked before it accepted the bytes.
+  if (!token || !verifyUploadToken(key, token)) {
+    return NextResponse.json({ error: 'That upload took too long. Try again.' }, { status: 403 })
+  }
+
+  const format = formatFromFilename(key)
+  if (!format) {
+    return NextResponse.json({ error: 'That file type is not supported.' }, { status: 400 })
+  }
+
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > P3D_MAX_UPLOAD_BYTES) {
+    return NextResponse.json({ error: `That model is too big (max ${P3D_MAX_UPLOAD_MB} MB).` }, { status: 400 })
+  }
+
+  try {
+    // The folder is resolved here rather than carried back from the browser: the
+    // path is already baked into the signed key, so re-deriving it is what keeps
+    // the library row and the object in the same place.
+    const folderId = await resolve3dFolderId(id)
+    const record = await saveMediaRecord({
+      key,
+      url: '', // saveMediaRecord rebuilds the Worker url for proxied providers
+      provider,
+      mimeType: mimeForFormat(format),
+      sizeBytes,
+      uploadedById: userId,
+      originalName: filename || undefined,
+      folderId,
+    })
+
+    const model = await createModel({
+      productId: targetProductId,
+      url: record.url,
+      mediaProvider: provider,
+      mediaKey: key,
+      mediaId: record.id,
+      filename: filename || key.split('/').pop() || `model.${format}`,
+      format,
+      size: sizeBytes,
+    })
+    return NextResponse.json(model, { status: 201 })
+  } catch (error) {
+    return NextResponse.json(
+      { error: `Could not save that model: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      { status: 500 },
+    )
+  }
+}
+
+/**
+ * The fallback: the file arrives as a form upload and this function forwards it to
+ * storage. Only reachable where the direct path is unavailable, and only useful
+ * for a model small enough to clear the platform's body cap.
+ */
+async function uploadThroughServer(request: NextRequest, id: string, provider: Provider, userId: string) {
   const form = await request.formData().catch(() => null)
   const file = form?.get('file')
   const rawTarget = form?.get('targetProductId')
@@ -83,8 +165,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     )
   }
 
-  const validation = await validateNonImageUpload(P3D_UPLOAD_MIME, file.size, {
-    allowedMimeTypes: [P3D_UPLOAD_MIME],
+  const mimeType = mimeForFormat(format)
+  const validation = await validateNonImageUpload(mimeType, file.size, {
+    allowedMimeTypes: [mimeType],
     maxSizeBytes: P3D_MAX_UPLOAD_BYTES,
   })
   if (!validation.valid) {
@@ -95,7 +178,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const folderId = await resolve3dFolderId(id)
     const folderPath = folderId ? await resolveFolderPath(folderId) : ''
     const buffer = Buffer.from(await file.arrayBuffer())
-    const result = await uploadMedia(buffer, P3D_UPLOAD_MIME, provider, file.name, folderPath || undefined)
+    const result = await uploadMedia(buffer, mimeType, provider, file.name, folderPath || undefined)
 
     // Recorded in the core library as well as in our own table, so the model turns
     // up in Media under the product's 3d folder rather than being a file only this
@@ -108,7 +191,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       provider,
       mimeType: result.mimeType,
       sizeBytes: result.sizeBytes,
-      uploadedById: gate.user.id,
+      uploadedById: userId,
       originalName: file.name || undefined,
       folderId,
     })
