@@ -73,7 +73,9 @@ export type FabricBundle = {
     materialName: string
     // Public url of the fabric texture (the option value's swatch).
     textureUrl: string
-    // Tile repeat, so the weave renders at true real-world scale: uvSpanCm/swatchCm.
+    // Tile repeat, so the weave renders at true real-world scale. Derived server-side
+    // from the model's real height, its measured geometry and the swatch size - see
+    // tileRepeat in lib/fabric/resolve.ts.
     repeat: number
   }>
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import type { DirectionalLight, Object3D, Scene, Texture, WebGLRenderer } from 'three'
+import type { BufferGeometry, DirectionalLight, Material, Matrix4, Object3D, Scene, Texture, WebGLRenderer } from 'three'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -168,6 +168,119 @@ export async function applyFabricPaint(
   })
 
   return texture
+}
+
+/**
+ * The unique glTF material names in a model. The fabric configurator offers these
+ * as the slot options, since a material name is the contract between a saved config
+ * and the file (see applyFabricPaint).
+ */
+export function collectMaterialNamesFrom(model: Object3D): string[] {
+  const names = new Set<string>()
+  model.traverse((child) => {
+    const mesh = child as Object3D & { material?: unknown }
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+    for (const material of materials) {
+      const name = (material as { name?: string }).name
+      if (name) names.add(name)
+    }
+  })
+  return [...names]
+}
+
+/**
+ * The model's bounding-box height (its Y extent) in the model's OWN units,
+ * world-space. One of the two numbers the fabric configurator measures from the
+ * mesh at config time: paired with the product's real height (a per-variation
+ * attribute value) it fixes the model's real-world scale, which the file itself
+ * does not reliably state - the same mm-vs-metres ambiguity frameModel works around.
+ */
+export async function measureModelHeight(model: Object3D): Promise<number> {
+  const { Box3, Vector3 } = await import('three')
+  return new Box3().setFromObject(model).getSize(new Vector3()).y
+}
+
+/**
+ * The texel density of a named material: UV units per model-unit (linear),
+ * area-weighted across every triangle carrying that material. This is how the
+ * material's texture is stretched over its geometry, and the other number the
+ * configurator measures at config time (see tileRepeat in lib/fabric/resolve.ts).
+ *
+ * Measured per triangle, NEVER from the global UV bounding box: a real product model
+ * is unwrapped into islands scattered across UV space, so the span is meaningless
+ * while the per-triangle ratio of texture area to real (world-space) area is exact -
+ * the lesson the flat-weave saga in FIELD_NOTES paid for. 3D area is taken in world
+ * space, so a node scale on the mesh counts; UV area is the raw geometry UVs, since
+ * the tile repeat applyFabricPaint later sets REPLACES any KHR_texture_transform
+ * rather than compounding with it.
+ *
+ * Returns 0 when the material is absent or its meshes carry no UVs, which the config
+ * stores as "not measured" and tileRepeat treats as uncalibrated.
+ */
+export async function measureTexelDensity(model: Object3D, materialName: string): Promise<number> {
+  const { Vector3 } = await import('three')
+  model.updateMatrixWorld(true)
+
+  const pa = new Vector3()
+  const pb = new Vector3()
+  const pc = new Vector3()
+  const eab = new Vector3()
+  const eac = new Vector3()
+  const cross = new Vector3()
+  let uvArea = 0
+  let worldArea = 0
+
+  model.traverse((child) => {
+    const mesh = child as Object3D & {
+      isMesh?: boolean
+      geometry?: BufferGeometry
+      material?: Material | Material[]
+      matrixWorld: Matrix4
+    }
+    if (!mesh.isMesh || !mesh.geometry) return
+    const geometry = mesh.geometry
+    if (!geometry.hasAttribute('position') || !geometry.hasAttribute('uv')) return
+
+    const position = geometry.getAttribute('position')
+    const uv = geometry.getAttribute('uv')
+    const index = geometry.index
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+    const refCount = index ? index.count : position.count
+    const vertexAt = (i: number): number => (index ? index.getX(i) : i)
+
+    // A multi-material mesh splits its triangles into groups by materialIndex, so
+    // only the groups whose material carries the name count. A plain single-material
+    // mesh (what GLTFLoader gives) has no groups, so treat it as one group over
+    // material[0].
+    const groups = geometry.groups.length > 0 ? geometry.groups : [{ start: 0, count: refCount, materialIndex: 0 }]
+
+    for (const group of groups) {
+      const material = materials[group.materialIndex ?? 0]
+      if (!material || material.name !== materialName) continue
+      const stop = Math.min(group.start + group.count, refCount)
+      for (let i = group.start; i + 3 <= stop; i += 3) {
+        const i0 = vertexAt(i)
+        const i1 = vertexAt(i + 1)
+        const i2 = vertexAt(i + 2)
+
+        pa.fromBufferAttribute(position, i0).applyMatrix4(mesh.matrixWorld)
+        pb.fromBufferAttribute(position, i1).applyMatrix4(mesh.matrixWorld)
+        pc.fromBufferAttribute(position, i2).applyMatrix4(mesh.matrixWorld)
+        worldArea += 0.5 * cross.crossVectors(eab.subVectors(pb, pa), eac.subVectors(pc, pa)).length()
+
+        const ax = uv.getX(i0)
+        const ay = uv.getY(i0)
+        const bx = uv.getX(i1)
+        const by = uv.getY(i1)
+        const cx = uv.getX(i2)
+        const cy = uv.getY(i2)
+        uvArea += 0.5 * Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay))
+      }
+    }
+  })
+
+  if (worldArea <= 0 || uvArea <= 0) return 0
+  return Math.sqrt(uvArea / worldArea)
 }
 
 /**

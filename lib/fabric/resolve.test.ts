@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { composeFabricBundle, parseSwatchCm } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { composeFabricBundle, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -14,6 +14,7 @@ const OPT_BACK_COLOUR = 'opt-back-colour'
 const VAL_TEAL = 'val-teal'
 const ATTR_SEAT_SIZE = 'attr-seat-size'
 const ATTR_BACK_SIZE = 'attr-back-size'
+const ATTR_HEIGHT = 'attr-height'
 const MODEL_WITH = 'model-with'
 const MODEL_NONE = 'model-none'
 
@@ -27,9 +28,12 @@ function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
       { modelId: MODEL_WITH, optionId: OPT_HEADREST, valueId: VAL_WITH },
     ],
     defaultModelId: MODEL_WITH,
+    heightAttributeId: ATTR_HEIGHT,
+    // Each model's bounding-box height in its own units, as measured at config time.
+    modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
     slots: [
-      { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: ATTR_SEAT_SIZE, uvSpanCm: 40, defaultSwatchCm: 20 },
-      { materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE, uvSpanCm: 40, defaultSwatchCm: 20 },
+      { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: ATTR_SEAT_SIZE, texelDensity: 1 },
+      { materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE, texelDensity: 1 },
     ],
     ...overrides,
   }
@@ -50,6 +54,10 @@ describe('parseSwatchCm', () => {
     expect(parseSwatchCm('10x10cm')).toBe(10)
   })
 
+  it('reads a plain height label too', () => {
+    expect(parseSwatchCm('137cm')).toBe(137)
+  })
+
   it('takes the first integer for a non-square label (v1 assumes square)', () => {
     expect(parseSwatchCm('10x20')).toBe(10)
   })
@@ -57,6 +65,24 @@ describe('parseSwatchCm', () => {
   it('returns null when the label carries no number', () => {
     expect(parseSwatchCm('one size')).toBeNull()
     expect(parseSwatchCm('')).toBeNull()
+  })
+})
+
+describe('tileRepeat', () => {
+  it('scales the weave to true size from the calibration and swatch', () => {
+    // repeat = heightCm / (modelHeightUnits * texelDensity * swatchCm)
+    //        = 200 / (100 * 1 * 20) = 0.1
+    expect(tileRepeat({ heightCm: 200, modelHeightUnits: 100, texelDensity: 1, swatchCm: 20 })).toBeCloseTo(0.1)
+    // A 10cm swatch tiles twice as densely as a 20cm one over the same surface.
+    expect(tileRepeat({ heightCm: 200, modelHeightUnits: 100, texelDensity: 1, swatchCm: 10 })).toBeCloseTo(0.2)
+  })
+
+  it('falls back to 1 (colour right, scale neutral) when any term is missing', () => {
+    const base = { heightCm: 200, modelHeightUnits: 100, texelDensity: 1, swatchCm: 20 }
+    expect(tileRepeat({ ...base, heightCm: null })).toBe(1)
+    expect(tileRepeat({ ...base, swatchCm: null })).toBe(1)
+    expect(tileRepeat({ ...base, texelDensity: 0 })).toBe(1)
+    expect(tileRepeat({ ...base, modelHeightUnits: 0 })).toBe(1)
   })
 })
 
@@ -90,7 +116,7 @@ describe('composeFabricBundle', () => {
     expect(bundle).toBeNull()
   })
 
-  it('maps each slot to its colour swatch and tile repeat', () => {
+  it('maps each slot to its colour swatch and true-scale tile repeat', () => {
     const bundle = composeFabricBundle(
       config(),
       selected(
@@ -99,30 +125,68 @@ describe('composeFabricBundle', () => {
         { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: TEAL_URL },
       ),
       [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
         { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
         { attributeId: ATTR_BACK_SIZE, label: '10x10cm' },
       ],
       models,
     )
-    expect(bundle?.slots).toEqual([
-      // uvSpanCm 40 / swatch 20 = 2 tiles; a 10cm swatch tiles twice as densely.
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, repeat: 2 },
-      { materialName: 'Fabric back', textureUrl: TEAL_URL, repeat: 4 },
-    ])
+    // MODEL_WITH height-units 100. Seat: 200/(100*1*20) = 0.1; back 200/(100*1*10) = 0.2.
+    const slots = bundle?.slots ?? []
+    expect(slots).toHaveLength(2)
+    expect(slots[0]).toMatchObject({ materialName: 'Fabric seat', textureUrl: CRAB_URL })
+    expect(slots[0]?.repeat).toBeCloseTo(0.1)
+    expect(slots[1]).toMatchObject({ materialName: 'Fabric back', textureUrl: TEAL_URL })
+    expect(slots[1]?.repeat).toBeCloseTo(0.2)
   })
 
-  it('falls back to the slot default swatch size when the child has no size assigned', () => {
+  it('uses the shown model height, so the headrest variant scales on its own file', () => {
+    const bundle = composeFabricBundle(
+      config(),
+      selected(
+        { optionId: OPT_HEADREST, valueId: VAL_NONE, swatch: null },
+        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
+      ),
+      [
+        { attributeId: ATTR_HEIGHT, label: '160cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+      models,
+    )
+    // MODEL_NONE height-units 80: 160/(80*1*20) = 0.1, not the with-headrest 100.
+    expect(bundle?.modelId).toBe(MODEL_NONE)
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('leaves a slot at repeat 1 when the child has no size or height value', () => {
     const bundle = composeFabricBundle(
       config(),
       selected(
         { optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null },
         { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
       ),
-      [], // no sizes assigned
+      [], // no sizes and no height assigned
       models,
     )
-    // Seat: default 20 -> 40/20 = 2. Back has no colour chosen, so it is skipped.
-    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, repeat: 2 }])
+    // Seat colour still applies; scale is neutral until the data is filled in. Back
+    // has no colour chosen, so it is skipped entirely.
+    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, repeat: 1 }])
+  })
+
+  it('leaves a slot at repeat 1 when the model is not calibrated', () => {
+    const bundle = composeFabricBundle(
+      config({ modelHeights: {} }), // never measured
+      selected(
+        { optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null },
+        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
+      ),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+      models,
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(1)
   })
 
   it('skips a slot whose colour has no usable texture url', () => {

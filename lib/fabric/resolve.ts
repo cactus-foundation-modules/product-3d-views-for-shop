@@ -48,10 +48,11 @@ export async function hasAttributeTables(): Promise<boolean> {
 }
 
 /**
- * The real-world centimetres a swatch label describes: "20x20cm" -> 20. Takes the
- * first integer in the label; v1 assumes square swatches, so a "10x20" reads as 10
- * and the non-square case is out of scope (noted in the spec). Returns null when
- * the label carries no number at all, which the caller falls back from.
+ * The real-world centimetres a size label describes: "20x20cm" -> 20, "137cm" ->
+ * 137. Takes the first integer in the label, so it reads both a square swatch size
+ * and an overall-height value; a non-square "10x20" reads as 10 (out of scope in
+ * v1). Returns null when the label carries no number at all, which the caller
+ * treats as "uncalibrated".
  */
 export function parseSwatchCm(label: string): number | null {
   const match = label.match(/\d+/)
@@ -94,22 +95,56 @@ export function composeFabricBundle(
   const model = modelId ? models.get(modelId) : undefined
   if (!model) return null
 
+  // The shown model's real overall height (cm, per variation) and its height in the
+  // model's own units (measured at config time). Together they give cm-per-model-unit,
+  // which is what turns a swatch's real size into a true-scale tile repeat. Both are
+  // needed and model-specific; either absent leaves tiling uncalibrated (repeat 1).
+  const heightLabel = config.heightAttributeId ? sizes.find((z) => z.attributeId === config.heightAttributeId)?.label : undefined
+  const heightCm = heightLabel ? parseSwatchCm(heightLabel) : null
+  const modelHeightUnits = config.modelHeights[modelId] ?? 0
+
   const slots = config.slots
     .map((slot) => {
       const choice = selected.find((s) => s.optionId === slot.colourOptionId)
       const textureUrl = choice?.swatch ?? ''
       if (!isHttpUrl(textureUrl)) return null
       const sizeLabel = sizes.find((z) => z.attributeId === slot.sizeAttributeId)?.label ?? ''
-      // A missing or unparseable size falls back to the slot's own default rather
-      // than skipping tiling: the fabric still renders, just not at true scale
-      // until the size is filled in on the child (a data-entry job, not a bug).
-      const swatchCm = parseSwatchCm(sizeLabel) ?? slot.defaultSwatchCm
-      const repeat = slot.uvSpanCm / swatchCm
+      const swatchCm = parseSwatchCm(sizeLabel)
+      const repeat = tileRepeat({ heightCm, modelHeightUnits, texelDensity: slot.texelDensity, swatchCm })
       return { materialName: slot.materialName, textureUrl, repeat }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
 
   return { modelId, modelUrl: model.url, format: model.format, slots }
+}
+
+/**
+ * The tile repeat for one fabric surface, at true real-world scale.
+ *
+ * Derivation: the model's real height (`heightCm`) over its height in the model's
+ * own units gives cm-per-model-unit. `texelDensity` (UV units per model-unit,
+ * measured from the mesh) times that height-in-units is how many UV units the
+ * surface spans; a swatch covering `swatchCm` of real fabric should tile once per
+ * `swatchCm`, so
+ *
+ *   repeat = realHeightCm / (modelHeightUnits * texelDensity * swatchCm)
+ *
+ * which is dimensionless. Every term must be present and positive; any missing one
+ * (an uncalibrated model, a variant with no size or height value) leaves the fabric
+ * at repeat 1 - the colour is still correct, only the scale is neutral until the
+ * data is filled in. There is deliberately no default size: the size is a
+ * per-variation fact, not something this module invents.
+ */
+export function tileRepeat(input: {
+  heightCm: number | null
+  modelHeightUnits: number
+  texelDensity: number
+  swatchCm: number | null
+}): number {
+  const { heightCm, modelHeightUnits, texelDensity, swatchCm } = input
+  if (!heightCm || !swatchCm || modelHeightUnits <= 0 || texelDensity <= 0) return 1
+  const repeat = heightCm / (modelHeightUnits * texelDensity * swatchCm)
+  return Number.isFinite(repeat) && repeat > 0 ? repeat : 1
 }
 
 /**
@@ -138,8 +173,10 @@ export async function resolveFabricForChild(
     WHERE v."child_product_id" = ${childProductId}
   `
 
-  // Sizes are a bonus: without product-attributes-for-shop the tiling simply falls
-  // back to each slot's default swatch size, which composeFabricBundle handles.
+  // The child's attribute values - both the per-slot swatch sizes and the model's
+  // overall height ride in here (all pat_attributes). Without product-attributes
+  // there are none, so tiling stays uncalibrated (repeat 1) and only the colour is
+  // applied, which composeFabricBundle handles.
   const sizes = (await hasAttributeTables())
     ? await prisma.$queryRaw<{ attributeId: string; label: string }[]>`
         SELECT a."id" AS "attributeId", av."label"

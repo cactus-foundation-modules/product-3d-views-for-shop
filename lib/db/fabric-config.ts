@@ -29,12 +29,12 @@ const FabricSlotSchema = z.object({
   colourOptionId: z.string(),
   // pat_attributes id whose value gives the real-world swatch size for tiling.
   sizeAttributeId: z.string(),
-  // Calibration: the real-world centimetres one texture tile (repeat = 1) spans on
-  // this surface. The admin sets it by eye against a real swatch (see the panel).
-  uvSpanCm: z.number().positive(),
-  // Used when the child has no size value assigned, so tiling still renders rather
-  // than dividing by an absent number.
-  defaultSwatchCm: z.number().positive(),
+  // This material's texel density, measured from the model in the browser at config
+  // time (the server never parses a GLB): UV units per model-unit, i.e. how the
+  // material's texture is stretched across its geometry. Combined with the model's
+  // real height it turns the per-variation swatch size into a true-scale tile
+  // repeat - see lib/fabric/resolve.ts. 0 means "not measured yet".
+  texelDensity: z.number().nonnegative().default(0),
 })
 
 export const FabricConfigSchema = z.object({
@@ -42,6 +42,16 @@ export const FabricConfigSchema = z.object({
   // Shown when no full variant is resolved yet, or when the active child's
   // structural option value matches no models[] entry.
   defaultModelId: z.string().default(''),
+  // pat_attributes id whose per-variation value gives the model's REAL overall
+  // height in cm. That one real dimension pins the model's real-world scale (the
+  // file carries geometry but not reliably its unit - mm vs metres), from which
+  // every fabric surface's true size, and so its tile density, is derived.
+  heightAttributeId: z.string().default(''),
+  // Each configured model's bounding-box height in its OWN units, measured from the
+  // mesh at config time. Keyed by p3d_models id. Paired with the real height above
+  // to get cm-per-model-unit. Kept per model because the with/without-headrest
+  // files differ in height.
+  modelHeights: z.record(z.string(), z.number()).default({}),
   slots: z.array(FabricSlotSchema).default([]),
 })
 

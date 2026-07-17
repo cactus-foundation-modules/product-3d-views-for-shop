@@ -2,28 +2,27 @@
 
 // The fabric configurator's admin panel, shown below the model list on a product
 // that has variations. It maps the model's named material slots to the product's
-// colour options and size attributes, and lets the admin calibrate tile scale by
-// eye against a live preview. Saves on its own button (not the editor's), the same
-// as the model list above it.
+// colour options, points the whole thing at the size and overall-height attributes,
+// and saves on its own button (not the editor's), the same as the model list above.
 //
-// Material names are read from the model file in the browser (loadModel below), so
-// the server never has to parse a GLB. The colour and size dropdowns are fed from
-// shop-variations and product-attributes through the admin endpoint.
+// The tile SCALE is not set by hand. The model's real-world scale is pinned by the
+// "Overall height" attribute (a real cm value, set per variation), and the rest is
+// measured from the mesh in the browser at config time - each material's texel
+// density and each model's height in its own units - since the server never parses
+// a GLB. Those measurements are baked into the saved config.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Object3D } from 'three'
-import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
-import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/types'
-import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
 type FabricModelRule = FabricConfig['models'][number]
 type FabricSlot = FabricConfig['slots'][number]
 
-const EMPTY: FabricConfig = { models: [], defaultModelId: '', slots: [] }
+const EMPTY: FabricConfig = { models: [], defaultModelId: '', heightAttributeId: '', modelHeights: {}, slots: [] }
 
 // Words that describe the KIND of thing rather than which part it is, dropped
 // before name-matching so "Fabric seat" pairs with "Seat Colour" on "seat" and not
@@ -54,18 +53,31 @@ function guessByName<T>(name: string, list: T[], getName: (item: T) => string): 
   return best
 }
 
-// The unique glTF material names in a loaded model, which become the slot options.
-function collectMaterialNames(object: Object3D): string[] {
-  const names = new Set<string>()
-  object.traverse((child) => {
-    const mesh = child as { material?: unknown }
-    const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
-    for (const mat of mats) {
-      const name = (mat as { name?: string }).name
-      if (name) names.add(name)
-    }
-  })
-  return [...names]
+// One measurement pass over the configured models: material names + each material's
+// texel density from the face model, and every configured model's height in its own
+// units. Pure of React state so the effect and the button share it without racing.
+type Measurement = { names: string[]; densities: Record<string, number>; heights: Record<string, number> }
+
+async function measureConfigured(
+  faceModel: P3dAdminModel | undefined,
+  configuredIds: string[],
+  allModels: P3dAdminModel[],
+): Promise<Measurement> {
+  const heights: Record<string, number> = {}
+  for (const id of configuredIds) {
+    const model = allModels.find((m) => m.id === id)
+    if (!model) continue
+    heights[id] = await measureModelHeight(await loadModel(model.url, model.format))
+  }
+
+  const densities: Record<string, number> = {}
+  let names: string[] = []
+  if (faceModel) {
+    const object = await loadModel(faceModel.url, faceModel.format)
+    names = collectMaterialNamesFrom(object)
+    for (const name of names) densities[name] = await measureTexelDensity(object, name)
+  }
+  return { names, densities, heights }
 }
 
 const css = `
@@ -74,17 +86,17 @@ const css = `
 .p3d-fab-sub{font-size:.8125rem;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--color-text-secondary);margin:0}
 .p3d-fab-help{color:var(--color-text-muted);font-size:.8125rem;margin:0;line-height:1.5}
 .p3d-fab-sec{display:grid;gap:.625rem}
-.p3d-fab-row{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:.625rem .75rem;
+.p3d-fab-row{display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;padding:.625rem .75rem;
   border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface)}
 .p3d-fab-field{display:grid;gap:.25rem}
 .p3d-fab-label{font-size:.75rem;font-weight:600;color:var(--color-text-secondary)}
-.p3d-fab-select,.p3d-fab-num{padding:.375rem .5rem;border:1px solid var(--color-border);border-radius:6px;
-  background:var(--color-bg);color:var(--color-text);font-size:.8125rem;font-family:inherit}
-.p3d-fab-select{min-width:150px}
-.p3d-fab-num{width:5rem}
-.p3d-fab-range{width:160px}
+.p3d-fab-select{padding:.375rem .5rem;border:1px solid var(--color-border);border-radius:6px;
+  background:var(--color-bg);color:var(--color-text);font-size:.8125rem;font-family:inherit;min-width:150px}
 .p3d-fab-when{font-size:.8125rem;color:var(--color-text-muted);display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .p3d-fab-spacer{flex:1}
+.p3d-fab-tag{font-size:.6875rem;padding:2px 6px;border-radius:4px;white-space:nowrap}
+.p3d-fab-tag-ok{background:var(--color-bg-subtle);color:var(--color-text-secondary);border:1px solid var(--color-border)}
+.p3d-fab-tag-warn{background:var(--color-bg-subtle);color:var(--color-danger);border:1px solid var(--color-border)}
 .p3d-fab-actions{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .p3d-fab-msg{font-size:.8125rem;margin:0}
 .p3d-fab-msg-ok{color:var(--color-success,var(--color-primary))}
@@ -107,7 +119,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const [models, setModels] = useState<P3dAdminModel[]>([])
   const [settings, setSettings] = useState<P3dConfig | null>(null)
   const [materialNames, setMaterialNames] = useState<string[]>([])
-  const [detecting, setDetecting] = useState(false)
+  // materialName -> measured texel density (UV per model-unit). Kept beside the
+  // config rather than in each slot, so it survives a slot's material changing and
+  // is merged into the slots only at save.
+  const [densities, setDensities] = useState<Record<string, number>>({})
+  const [measuring, setMeasuring] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
@@ -118,7 +134,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { config: FabricConfig | null; options: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
-        setConfig(data.config ?? EMPTY)
+        const saved = data.config ?? EMPTY
+        setConfig(saved)
+        // Seed the densities from what was measured on the last save, so the panel
+        // is usable before a re-detect and a save without one keeps them.
+        setDensities(Object.fromEntries(saved.slots.map((s) => [s.materialName, s.texelDensity])))
         setOptions(data.options)
         setAttributes(data.attributes)
         setModels(data.models)
@@ -136,35 +156,46 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     [models, config.defaultModelId],
   )
 
-  // The manual "Detect from model" path, with a spinner. Safe to setState directly
-  // here because it runs from the button's click handler, not from an effect.
-  const detect = useCallback(async () => {
-    if (!faceModel) return
-    setDetecting(true)
-    try {
-      const object = await loadModel(faceModel.url, faceModel.format)
-      setMaterialNames(collectMaterialNames(object))
-    } catch {
-      setMaterialNames([])
-    } finally {
-      setDetecting(false)
-    }
-  }, [faceModel])
+  // Every model the config actually uses - default plus each structural rule - whose
+  // height must be measured so its variants calibrate. Falls back to the face model
+  // so a not-yet-defaulted product still measures something.
+  const configuredIds = useMemo(() => {
+    const ids = [...new Set([config.defaultModelId, ...config.models.map((m) => m.modelId)].filter(Boolean))]
+    if (ids.length === 0 && faceModel) ids.push(faceModel.id)
+    return ids
+  }, [config.defaultModelId, config.models, faceModel])
 
-  // Read material names once a model is known, so the slot dropdowns are populated
-  // without the admin having to ask. Written as its own promise chain rather than
-  // calling detect(): an effect must keep its setState inside an async callback, and
-  // detect() would setState (the spinner) synchronously the moment the effect ran.
+  const modelSignature = JSON.stringify(configuredIds)
+
+  const applyMeasurement = useCallback((m: Measurement) => {
+    setMaterialNames(m.names)
+    setDensities((prev) => ({ ...prev, ...m.densities }))
+    setConfig((c) => ({ ...c, modelHeights: { ...c.modelHeights, ...m.heights } }))
+  }, [])
+
+  // Measure the configured models whenever the set of them changes, so the material
+  // list, texel densities and model heights track the current selection without the
+  // admin asking. A promise chain, so the effect's only setState is in a callback
+  // (the manual button below carries the spinner instead).
   useEffect(() => {
-    if (!faceModel) return
+    if (models.length === 0) return
     let cancelled = false
-    loadModel(faceModel.url, faceModel.format)
-      .then((object) => { if (!cancelled) setMaterialNames(collectMaterialNames(object)) })
-      .catch(() => { if (!cancelled) setMaterialNames([]) })
+    measureConfigured(faceModel, configuredIds, models)
+      .then((m) => { if (!cancelled) applyMeasurement(m) })
+      .catch(() => {})
     return () => { cancelled = true }
-    // Re-read only when the face model file changes, not on every keystroke.
+    // Keyed on the configured model ids; faceModel/models are read as the source to
+    // measure, not triggers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [faceModel?.url])
+  }, [modelSignature])
+
+  const detect = () => {
+    setMeasuring(true)
+    measureConfigured(faceModel, configuredIds, models)
+      .then(applyMeasurement)
+      .catch(() => {})
+      .finally(() => setMeasuring(false))
+  }
 
   const setModelRule = (i: number, patch: Partial<FabricModelRule>) =>
     setConfig((c) => ({ ...c, models: c.models.map((m, idx) => (idx === i ? { ...m, ...patch } : m)) }))
@@ -190,8 +221,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           materialName: name,
           colourOptionId: colour?.id ?? options[0]?.id ?? '',
           sizeAttributeId: size?.id ?? attributes[0]?.id ?? '',
-          uvSpanCm: 40,
-          defaultSwatchCm: 20,
+          // Measured on save from `densities`; 0 until then.
+          texelDensity: 0,
         },
       ],
     }))
@@ -200,11 +231,17 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const save = async () => {
     setSaving(true)
     setMessage(null)
+    // Merge the measured texel densities into the slots at the last moment, so a
+    // slot always saves the density of the material it currently names.
+    const payload: FabricConfig = {
+      ...config,
+      slots: config.slots.map((s) => ({ ...s, texelDensity: densities[s.materialName] ?? 0 })),
+    }
     try {
       const res = await fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/fabric`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(config),
+        body: JSON.stringify(payload),
       })
       if (res.ok) {
         setMessage({ kind: 'ok', text: 'Saved.' })
@@ -219,9 +256,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     }
   }
 
-  // The paints for the live preview: each slot's first available swatch, tiled at
-  // the calibration the admin is setting. Recomputed as the sliders move, so the
-  // preview updates in place (Viewer3d repaints without a rebuild).
+  // A rough preview of each slot's colour on the model. It is a colour/placement
+  // check, not a scale one - true scale needs the per-variation height and swatch
+  // values, which live on the variants, not here - so the tile density is a ballpark
+  // from the measured texel density assuming a ~20cm swatch, and is labelled as such.
   const previewSlots = useMemo(
     () =>
       config.slots
@@ -229,15 +267,17 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           const opt = options.find((o) => o.id === slot.colourOptionId)
           const swatch = opt?.values.find((v) => v.swatch && /^https?:\/\//.test(v.swatch))?.swatch
           if (!swatch) return null
-          return { materialName: slot.materialName, textureUrl: swatch, repeat: slot.uvSpanCm / slot.defaultSwatchCm }
+          const density = densities[slot.materialName] ?? 0
+          const repeat = density > 0 ? Math.min(50, Math.max(0.01, 1 / (density * 20))) : 1
+          return { materialName: slot.materialName, textureUrl: swatch, repeat }
         })
         .filter((s): s is { materialName: string; textureUrl: string; repeat: number } => s !== null),
-    [config.slots, options],
+    [config.slots, options, densities],
   )
 
-  // The panel is size-driven: without a size attribute there is nothing to scale
-  // the weave against, so it stays hidden and the product's models behave as plain
-  // 3D views. (The parent only mounts this for a product with variations.)
+  // The panel is size-driven: without a size attribute there is nothing to scale the
+  // weave against, so it stays hidden and the product's models behave as plain 3D
+  // views. (The parent only mounts this for a product with variations.)
   if (loading) return null
   if (attributes.length === 0) return null
 
@@ -251,12 +291,13 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         <h4 className="p3d-fab-h">Fabric configurator</h4>
         <p className="p3d-fab-help">
           Re-texture one model live from the shopper&rsquo;s choices instead of uploading a separate file per colour.
-          Point each fabric part of the model at the colour option that changes it, and set the scale so the weave matches
-          a real swatch. Shoppers then see a single <strong>3D configurator</strong> in the gallery that updates as they pick.
+          Point each fabric part of the model at the colour option that changes it. The weave is scaled to true size
+          automatically, from the swatch size and overall height you set per variation - no fiddling with tile scale by hand.
         </p>
       </div>
 
-      {/* Models: which file to show for a structural option like a headrest. */}
+      {/* Models: which file to show for a structural option like a headrest, plus the
+          height attribute that pins each model's real-world scale. */}
       <div className="p3d-fab-sec">
         <p className="p3d-fab-sub">Models</p>
         <p className="p3d-fab-help">
@@ -310,7 +351,19 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               ))}
             </select>
           </div>
-          <p className="p3d-fab-help" style={{ flex: 1 }}>Shown before a shopper has made every choice. The configurator only appears once this is set.</p>
+          <div className="p3d-fab-field">
+            <label className="p3d-fab-label">Overall height from</label>
+            <select className="p3d-fab-select" value={config.heightAttributeId} onChange={(e) => setConfig((c) => ({ ...c, heightAttributeId: e.target.value }))}>
+              <option value="">attribute…</option>
+              {attributes.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </div>
+          <p className="p3d-fab-help" style={{ flex: 1, minWidth: '12rem' }}>
+            The attribute holding the product&rsquo;s real overall height in cm, set per variation. It pins the model&rsquo;s
+            true size so the weave scales correctly. The configurator only appears once a default model is set.
+          </p>
         </div>
       </div>
 
@@ -318,8 +371,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       <div className="p3d-fab-sec">
         <div className="p3d-fab-actions">
           <p className="p3d-fab-sub" style={{ margin: 0 }}>Fabric parts</p>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void detect()} disabled={detecting || !faceModel}>
-            {detecting ? 'Reading model…' : 'Detect from model'}
+          <button type="button" className="btn btn-secondary btn-sm" onClick={detect} disabled={measuring || !faceModel}>
+            {measuring ? 'Reading model…' : 'Detect from model'}
           </button>
         </div>
         {materialNames.length === 0 && (
@@ -327,80 +380,66 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
             No fabric parts read from the model yet. Set a default model above, then use <strong>Detect from model</strong>.
           </p>
         )}
-        {config.slots.map((slot, i) => (
-          <div key={i} className="p3d-fab-row">
-            <div className="p3d-fab-field">
-              <label className="p3d-fab-label">Part</label>
-              <select className="p3d-fab-select" value={slot.materialName} onChange={(e) => setSlot(i, { materialName: e.target.value })}>
-                {slot.materialName === '' && <option value="">Choose a part…</option>}
-                {materialOptions(slot.materialName).map((n) => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
+        {config.slots.map((slot, i) => {
+          const measured = (densities[slot.materialName] ?? 0) > 0
+          return (
+            <div key={i} className="p3d-fab-row">
+              <div className="p3d-fab-field">
+                <label className="p3d-fab-label">Part</label>
+                <select className="p3d-fab-select" value={slot.materialName} onChange={(e) => setSlot(i, { materialName: e.target.value })}>
+                  {slot.materialName === '' && <option value="">Choose a part…</option>}
+                  {materialOptions(slot.materialName).map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="p3d-fab-field">
+                <label className="p3d-fab-label">Colour from</label>
+                <select className="p3d-fab-select" value={slot.colourOptionId} onChange={(e) => setSlot(i, { colourOptionId: e.target.value })}>
+                  <option value="">option…</option>
+                  {options.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="p3d-fab-field">
+                <label className="p3d-fab-label">Size from</label>
+                <select className="p3d-fab-select" value={slot.sizeAttributeId} onChange={(e) => setSlot(i, { sizeAttributeId: e.target.value })}>
+                  <option value="">attribute…</option>
+                  {attributes.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </div>
+              <span className={`p3d-fab-tag ${measured ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
+                {measured ? 'weave scale measured' : 'not measured - use Detect'}
+              </span>
+              <span className="p3d-fab-spacer" />
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => removeSlot(i)}>Remove</button>
             </div>
-            <div className="p3d-fab-field">
-              <label className="p3d-fab-label">Colour from</label>
-              <select className="p3d-fab-select" value={slot.colourOptionId} onChange={(e) => setSlot(i, { colourOptionId: e.target.value })}>
-                <option value="">option…</option>
-                {options.map((o) => (
-                  <option key={o.id} value={o.id}>{o.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="p3d-fab-field">
-              <label className="p3d-fab-label">Size from</label>
-              <select className="p3d-fab-select" value={slot.sizeAttributeId} onChange={(e) => setSlot(i, { sizeAttributeId: e.target.value })}>
-                <option value="">attribute…</option>
-                {attributes.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="p3d-fab-field">
-              <label className="p3d-fab-label">Scale ({slot.uvSpanCm} cm/tile)</label>
-              <input
-                className="p3d-fab-range"
-                type="range"
-                min={5}
-                max={200}
-                step={1}
-                value={slot.uvSpanCm}
-                onChange={(e) => setSlot(i, { uvSpanCm: Number(e.target.value) })}
-              />
-            </div>
-            <div className="p3d-fab-field">
-              <label className="p3d-fab-label">Default swatch cm</label>
-              <input
-                className="p3d-fab-num"
-                type="number"
-                min={1}
-                step={1}
-                value={slot.defaultSwatchCm}
-                onChange={(e) => setSlot(i, { defaultSwatchCm: Math.max(1, Number(e.target.value) || 1) })}
-              />
-            </div>
-            <span className="p3d-fab-spacer" />
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => removeSlot(i)}>Remove</button>
-          </div>
-        ))}
+          )
+        })}
         <div className="p3d-fab-actions">
           <button type="button" className="btn btn-secondary btn-sm" onClick={addSlot} disabled={materialNames.length === 0}>+ Add fabric part</button>
           {previewSlots.length > 0 && faceModel && settings && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowPreview((v) => !v)}>
-              {showPreview ? 'Hide preview' : 'Preview & calibrate'}
+              {showPreview ? 'Hide preview' : 'Preview colours'}
             </button>
           )}
         </div>
       </div>
 
       {showPreview && faceModel && settings && (
-        <div className="p3d-fab-preview">
-          <Viewer3d
-            item={{ key: 'fabric-preview', productId, url: faceModel.url, format: faceModel.format, label: `${formatLabel(faceModel.format)} preview` }}
-            settings={settings}
-            fabric={{ slots: previewSlots }}
-          />
-        </div>
+        <>
+          <p className="p3d-fab-help">Colour and placement preview. On the storefront the weave scale is set exactly from each variation&rsquo;s size and height.</p>
+          <div className="p3d-fab-preview">
+            <Viewer3d
+              item={{ key: 'fabric-preview', productId, url: faceModel.url, format: faceModel.format, label: `${formatLabel(faceModel.format)} preview` }}
+              settings={settings}
+              fabric={{ slots: previewSlots }}
+            />
+          </div>
+        </>
       )}
 
       <div className="p3d-fab-actions">
