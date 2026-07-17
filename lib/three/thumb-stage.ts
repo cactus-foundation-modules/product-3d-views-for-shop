@@ -1,7 +1,7 @@
 'use client'
 
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
-import { addLights, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 
 // Drives every auto-rotating 3D thumbnail on the page from ONE WebGL context.
 //
@@ -121,7 +121,7 @@ export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D): Pr
 
   const { Scene, PerspectiveCamera } = await import('three')
   const scene = new Scene()
-  await addLights(scene)
+  await addLights(scene, active)
   const pivot = await frameModel(scene, model)
 
   const camera = new PerspectiveCamera(40, 1, 0.1, 100)
@@ -141,6 +141,9 @@ export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D): Pr
     // WebGL context open, and a product page with a viewer open wants the
     // context budget more than an empty strip does.
     if (entries.size === 0 && renderer) {
+      // Before the renderer goes: the environment was built against it and is
+      // useless once it is gone, but is a GPU allocation the collector can't see.
+      disposeEnvironment(renderer)
       renderer.dispose()
       renderer = null
       if (frame !== null) cancelAnimationFrame(frame)

@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, disposeEnvironment, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 
 type Status = 'loading' | 'ready' | 'failed'
@@ -46,7 +46,7 @@ export function Viewer3d({ item }: { item: P3dItem }) {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 
       const scene = new Scene()
-      await addLights(scene)
+      await addLights(scene, renderer)
       // The pivot, not the model: frameModel centres the model inside it, so
       // OrbitControls' target (the origin) is the middle of the model rather
       // than whatever point its file happened to be authored around.
@@ -103,6 +103,7 @@ export function Viewer3d({ item }: { item: P3dItem }) {
         controls.dispose()
         scene.remove(pivot)
         disposeModel(model)
+        disposeEnvironment(renderer)
         // Frees the WebGL context itself. Without it, a shopper flicking between
         // variations leaks one context per model until the browser starts killing
         // the oldest - which takes the thumbnails out with it.

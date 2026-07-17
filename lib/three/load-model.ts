@@ -1,6 +1,6 @@
 'use client'
 
-import type { Object3D, Scene } from 'three'
+import type { Object3D, Scene, Texture, WebGLRenderer } from 'three'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
 // Loading and framing a model, kept apart from the React components so both the
@@ -132,14 +132,65 @@ export function disposeModel(model: Object3D): void {
   })
 }
 
-/** A neutral three-point-ish lighting rig, so an unlit model is not a silhouette. */
-export async function addLights(scene: Scene): Promise<void> {
-  const { AmbientLight, DirectionalLight } = await import('three')
-  scene.add(new AmbientLight(0xffffff, 2))
-  const key = new DirectionalLight(0xffffff, 2.5)
+// The environment is generated once per renderer and shared by every scene it
+// draws: PMREM is a real cost (it renders and filters a small cubemap), and the
+// thumbnail strip builds one scene per thumbnail off a single shared renderer.
+// Keyed weakly so a disposed renderer takes its entry with it rather than
+// pinning a GPU texture for the life of the page.
+const environments = new WeakMap<WebGLRenderer, Texture>()
+
+/**
+ * Light a scene the way glTF expects: an image-based environment, plus a gentle
+ * directional rig for definition.
+ *
+ * The environment is not a nicety, it is most of the point. A PBR material with
+ * `metallic: 1` has NO diffuse term - a metal's colour is *entirely* what it
+ * reflects. Lights alone give it nothing to reflect but a pinprick specular, so
+ * without an environment every chrome, steel and aluminium surface renders
+ * BLACK. Deskwell's Chiro Plus has a polished chrome base (metallic 1, roughness
+ * 0) that came out black on the site and silver in every desktop viewer, which
+ * is what put us onto this: measured 9.3 brightness without an environment, 195.4
+ * with, and the model file makes no difference either way. Every other viewer
+ * (macOS Quick Look, Blender, the pCon catalogue) supplies a default environment
+ * as a matter of course; we were the odd one out.
+ *
+ * `RoomEnvironment` is three's own procedural studio - a few emissive boxes in a
+ * white room, built in code. No asset to host, nothing to fetch, no licence.
+ *
+ * The lights are much weaker than they were. They previously carried the whole
+ * scene alone and had to be cranked to do it (ambient 2, key 2.5), which flooded
+ * out the very shading that makes a normal map read as texture. With the
+ * environment doing the ambient work, these only add direction.
+ */
+export async function addLights(scene: Scene, renderer: WebGLRenderer): Promise<void> {
+  const { AmbientLight, DirectionalLight, PMREMGenerator } = await import('three')
+
+  let environment = environments.get(renderer)
+  if (!environment) {
+    const { RoomEnvironment } = await import('three/examples/jsm/environments/RoomEnvironment.js')
+    const pmrem = new PMREMGenerator(renderer)
+    environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    // The generator's own scratch targets, not the texture it handed back.
+    pmrem.dispose()
+    environments.set(renderer, environment)
+  }
+  scene.environment = environment
+
+  scene.add(new AmbientLight(0xffffff, 0.6))
+  const key = new DirectionalLight(0xffffff, 1.2)
   key.position.set(3, 5, 4)
   scene.add(key)
-  const fill = new DirectionalLight(0xffffff, 1)
+  const fill = new DirectionalLight(0xffffff, 0.4)
   fill.position.set(-4, 1, -3)
   scene.add(fill)
+}
+
+/**
+ * Drop the environment built for `renderer`. Only for a caller that is disposing
+ * the renderer itself - the texture outlives the WeakMap entry otherwise, since
+ * a GPU allocation is not something the garbage collector can see.
+ */
+export function disposeEnvironment(renderer: WebGLRenderer): void {
+  environments.get(renderer)?.dispose()
+  environments.delete(renderer)
 }
