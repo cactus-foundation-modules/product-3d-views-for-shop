@@ -121,6 +121,22 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
     if (stale) onPick(null)
   }, [stale, onPick])
 
+  // Lead the stage with the model instead of waiting for a click: a product that
+  // carries a 3D view opens on the thing the shopper can spin, not on a flat photo
+  // they then have to hunt past. Fires once, on first paint, and only when a model
+  // is actually on offer for the opening view - a later variation change that
+  // brings a model in must not yank the stage away from a photo the shopper chose.
+  const ledWithModel = useRef(false)
+  useEffect(() => {
+    if (ledWithModel.current) return
+    ledWithModel.current = true
+    const first = items[0]
+    if (activeKey === null && first) onPick(first.key)
+    // Read once on mount - the opening view is a one-shot decision, so items,
+    // activeKey and onPick are deliberately not dependencies here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   if (items.length === 0) return null
 
   return (
