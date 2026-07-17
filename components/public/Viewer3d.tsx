@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, addShadowCatcher, disposeEnvironment, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, addShadowCatcher, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -69,6 +69,10 @@ export function Viewer3d({ item, settings }: { item: P3dItem; settings: P3dConfi
         // OrbitControls' target (the origin) is the middle of the model rather
         // than whatever point its file happened to be authored around.
         const pivot = await frameModel(scene, model)
+        // Filter textures at the GPU's best, or a fine weave washes to a flat
+        // colour the moment the surface tilts away from the camera - which, on a
+        // model that turns, is most of the time. Needs the renderer for its ceiling.
+        applyMaxAnisotropy(model, renderer)
         if (cancelled) { renderer.dispose(); disposeModel(model); return }
 
         // Transparent lets the page's own background through (the default, and why

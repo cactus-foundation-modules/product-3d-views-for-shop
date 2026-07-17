@@ -124,6 +124,55 @@ export async function frameModel(scene: Scene, model: Object3D, fitTo = 2): Prom
 }
 
 /**
+ * Turn anisotropic texture filtering up to the GPU's maximum for every texture in
+ * a model. three loads textures at anisotropy 1 - its own default, and the one
+ * thing GLTFLoader never sets - which means any surface seen at a grazing angle
+ * samples a heavily-downsampled mip and washes its detail out to a single flat
+ * colour. A chair's seat and back are exactly that: large, and mostly viewed
+ * obliquely as the model turns. A fine fabric weave is the first thing to
+ * disappear, leaving one blob of colour where the texture should be. Tone mapping
+ * (Filmic and friends) does nothing for this - it remaps brightness, not sharpness.
+ *
+ * Every other viewer (Blender, macOS Quick Look, the pCon catalogue) filters this
+ * way as a matter of course; without it we drew the same file softer than the
+ * software it was authored in - the same "we were the odd one out" story as the
+ * missing environment that turned chrome black.
+ *
+ * Needs the renderer only to ask the GPU its ceiling (getMaxAnisotropy, typically
+ * 16). It costs nothing at draw time beyond a sampler flag: no extra geometry, no
+ * bigger texture, just a better read of the one already uploaded. Applied to every
+ * map, not only the base colour, so a normal map's relief holds up at an angle too.
+ */
+export function applyMaxAnisotropy(model: Object3D, renderer: WebGLRenderer): void {
+  const max = renderer.capabilities.getMaxAnisotropy()
+  // 1 means the GPU offers no anisotropic filtering (or is capped to none); there
+  // is nothing to raise, and writing it back would only force a pointless re-upload.
+  if (max <= 1) return
+  model.traverse((child) => {
+    const mesh = child as Object3D & { material?: unknown }
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+    for (const material of materials) {
+      const m = material as Record<string, unknown>
+      // Same structural probe disposeModel uses: the loaders hand back materials
+      // whose texture slots (map, normalMap, roughnessMap, …) are the only values
+      // flagged isTexture, so walking the properties catches every map by shape
+      // rather than naming each one and missing whatever a model happens to carry.
+      for (const value of Object.values(m)) {
+        const tex = value as { isTexture?: boolean; anisotropy?: number; needsUpdate?: boolean } | null
+        if (tex && typeof tex === 'object' && tex.isTexture && tex.anisotropy !== max) {
+          tex.anisotropy = max
+          // Textures are shared across the clones loadModel hands out, so this may
+          // touch one already raised by another mount; the guard above keeps that a
+          // no-op. When it does change, needsUpdate re-uploads it once with the new
+          // sampler state, then three clears the flag itself.
+          tex.needsUpdate = true
+        }
+      }
+    }
+  })
+}
+
+/**
  * Release a model's GPU memory. Geometries and textures live in the GPU and are
  * not reachable by the garbage collector, so a shopper flicking through the
  * variations of a product would otherwise pile up every model they had looked at

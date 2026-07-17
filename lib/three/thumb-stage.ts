@@ -1,7 +1,7 @@
 'use client'
 
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
-import { addLights, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
 // Drives every auto-rotating 3D thumbnail on the page from ONE WebGL context.
@@ -140,6 +140,9 @@ export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D, set
   const scene = new Scene()
   await addLights(scene, active, settings)
   const pivot = await frameModel(scene, model)
+  // Same filtering the stage viewer gets: a thumbnail spins, so its surfaces are
+  // seen at an angle constantly, and without this the weave on them muddies too.
+  applyMaxAnisotropy(model, active)
 
   const camera = new PerspectiveCamera(40, 1, 0.1, 100)
   camera.position.set(0, 0.6, 4)
