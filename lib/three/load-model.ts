@@ -1,7 +1,25 @@
 'use client'
 
-import type { Object3D, Scene, Texture, WebGLRenderer } from 'three'
+import type { DirectionalLight, Object3D, Scene, Texture, WebGLRenderer } from 'three'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
+import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
+
+// The lighting numbers addLights needs, pulled out of the full config so this
+// file - shared by the stage viewer and the thumbnail strip - depends on the
+// four intensities it actually uses rather than the whole settings shape. Every
+// default is the value this module hardcoded before the settings existed, so a
+// caller that passes nothing lights a scene exactly as it always did.
+export type P3dLighting = Pick<
+  P3dConfig,
+  'environmentIntensity' | 'ambientIntensity' | 'keyLightIntensity' | 'fillLightIntensity'
+>
+
+const DEFAULT_LIGHTING: P3dLighting = {
+  environmentIntensity: 1,
+  ambientIntensity: 0.6,
+  keyLightIntensity: 1.2,
+  fillLightIntensity: 0.4,
+}
 
 // Loading and framing a model, kept apart from the React components so both the
 // thumbnails and the stage viewer frame a model identically - a thumbnail that
@@ -161,8 +179,17 @@ const environments = new WeakMap<WebGLRenderer, Texture>()
  * scene alone and had to be cranked to do it (ambient 2, key 2.5), which flooded
  * out the very shading that makes a normal map read as texture. With the
  * environment doing the ambient work, these only add direction.
+ *
+ * Returns the key light so a caller that wants shadows (the stage viewer, never
+ * the thumbnails) can turn it into the caster - see addShadowCatcher. The
+ * intensities and the environment's contribution are the site owner's, defaulting
+ * to the values above.
  */
-export async function addLights(scene: Scene, renderer: WebGLRenderer): Promise<void> {
+export async function addLights(
+  scene: Scene,
+  renderer: WebGLRenderer,
+  lighting: P3dLighting = DEFAULT_LIGHTING,
+): Promise<DirectionalLight> {
   const { AmbientLight, DirectionalLight, PMREMGenerator } = await import('three')
 
   let environment = environments.get(renderer)
@@ -175,14 +202,106 @@ export async function addLights(scene: Scene, renderer: WebGLRenderer): Promise<
     environments.set(renderer, environment)
   }
   scene.environment = environment
+  // Scales the environment's contribution without rebuilding the PMREM texture,
+  // so the cache above still holds and only this scalar changes per scene. This
+  // is the dial that decides whether chrome reads as metal or as a black hole.
+  scene.environmentIntensity = lighting.environmentIntensity
 
-  scene.add(new AmbientLight(0xffffff, 0.6))
-  const key = new DirectionalLight(0xffffff, 1.2)
+  scene.add(new AmbientLight(0xffffff, lighting.ambientIntensity))
+  const key = new DirectionalLight(0xffffff, lighting.keyLightIntensity)
   key.position.set(3, 5, 4)
   scene.add(key)
-  const fill = new DirectionalLight(0xffffff, 0.4)
+  const fill = new DirectionalLight(0xffffff, lighting.fillLightIntensity)
   fill.position.set(-4, 1, -3)
   scene.add(fill)
+  return key
+}
+
+// Shadow map size and PCF radius per softness. Bigger map + wider radius is
+// softer and costs more; the numbers are picked so 'soft' looks right on a
+// product-sized model at the stage's usual on-screen size.
+const SHADOW_QUALITY: Record<P3dConfig['shadowSoftness'], { mapSize: number; radius: number }> = {
+  sharp: { mapSize: 2048, radius: 1 },
+  soft: { mapSize: 1024, radius: 4 },
+  softest: { mapSize: 512, radius: 8 },
+}
+
+/**
+ * Put a shadow under a framed model: a ground plane that catches the key light's
+ * shadow and nothing else, plus the renderer and light state that makes the light
+ * cast one. Only the stage viewer calls this - a shadow on a 64px thumbnail is
+ * cost with nothing to show for it, and the thumbnails spin their pivot, which
+ * would drag a baked-in shadow round with them.
+ *
+ * The plane sits at the model's own base, found from its post-frame bounding box,
+ * so it grounds the model rather than floating under or clipping through it. The
+ * camera orbits (autoRotate moves the camera, not the model), so the model and
+ * its shadow hold still while the view goes round - which is what a real object
+ * on a surface does.
+ *
+ * Returns a teardown for the plane's geometry and material; the caller already
+ * disposes the model and renderer, this is the one thing here it did not make.
+ */
+export async function addShadowCatcher(
+  scene: Scene,
+  renderer: WebGLRenderer,
+  keyLight: DirectionalLight,
+  model: Object3D,
+  opts: { softness: P3dConfig['shadowSoftness']; opacity: number },
+): Promise<() => void> {
+  const { Box3, Mesh, PlaneGeometry, ShadowMaterial, Vector3, PCFSoftShadowMap } = await import('three')
+
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = PCFSoftShadowMap
+
+  const quality = SHADOW_QUALITY[opts.softness]
+
+  // Every mesh in the model casts, or the shadow is of an empty space. Probed
+  // structurally rather than against the Mesh class: the loaders hand back plain
+  // Object3D trees and isMesh is the flag three itself checks.
+  model.traverse((child) => {
+    const mesh = child as { isMesh?: boolean; castShadow: boolean }
+    if (mesh.isMesh) mesh.castShadow = true
+  })
+
+  const box = new Box3().setFromObject(model)
+  const size = box.getSize(new Vector3())
+  const centre = box.getCenter(new Vector3())
+  // A plane comfortably larger than the model's footprint, so the shadow never
+  // falls off its edge, laid flat at the model's base.
+  const extent = Math.max(size.x, size.z) * 4 || 4
+  const ground = new Mesh(
+    new PlaneGeometry(extent, extent),
+    // ShadowMaterial is transparent everywhere the shadow is not, so on a
+    // transparent stage the plane itself is invisible and only the shadow shows.
+    new ShadowMaterial({ opacity: opts.opacity }),
+  )
+  ground.rotation.x = -Math.PI / 2
+  ground.position.set(centre.x, box.min.y, centre.z)
+  ground.receiveShadow = true
+  scene.add(ground)
+
+  keyLight.castShadow = true
+  keyLight.shadow.mapSize.set(quality.mapSize, quality.mapSize)
+  keyLight.shadow.radius = quality.radius
+  // The shadow camera is orthographic and must contain the model, or the shadow
+  // is clipped to a box smaller than the thing casting it. Sized off the model
+  // with headroom, near/far spanning the light's distance to the ground.
+  const reach = Math.max(size.x, size.y, size.z) * 1.5 || 3
+  const cam = keyLight.shadow.camera
+  cam.left = -reach
+  cam.right = reach
+  cam.top = reach
+  cam.bottom = -reach
+  cam.near = 0.1
+  cam.far = reach * 6
+  cam.updateProjectionMatrix()
+
+  return () => {
+    scene.remove(ground)
+    ground.geometry.dispose()
+    ground.material.dispose()
+  }
 }
 
 /**

@@ -2,6 +2,7 @@
 
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
 import { addLights, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
 // Drives every auto-rotating 3D thumbnail on the page from ONE WebGL context.
 //
@@ -39,9 +40,17 @@ const entries = new Set<Entry>()
 let frame: number | null = null
 let lastTime = 0
 
+// The site owner's viewer settings, captured from the first thumbnail to mount.
+// The strip shares one renderer built once, so the renderer-level choices
+// (antialias, pixel-ratio cap) are necessarily settled by whoever gets there
+// first; every thumbnail on a page carries the same settings, so "first" and
+// "any" are the same value. Null until the first mount, before which the loop
+// has nothing to draw anyway.
+let thumbSettings: P3dConfig | null = null
+
 // Radians per second. Slow enough to read the shape rather than to advertise that
 // it moves; a thumbnail spinning fast enough to notice is a thumbnail nobody can
-// actually look at.
+// actually look at. The site owner can switch it off entirely (thumbnailAutoRotate).
 const SPIN_RATE = 0.6
 
 // The shopper asked their operating system for less movement, so the thumbnails
@@ -60,8 +69,8 @@ async function getRenderer(): Promise<WebGLRenderer | null> {
   if (rendererFailed) return null
   try {
     const { WebGLRenderer } = await import('three')
-    renderer = new WebGLRenderer({ alpha: true, antialias: true })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+    renderer = new WebGLRenderer({ alpha: true, antialias: thumbSettings?.antialias ?? true })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, thumbSettings?.pixelRatioCap ?? 2))
     return renderer
   } catch {
     rendererFailed = true
@@ -75,7 +84,10 @@ function tick(time: number): void {
   lastTime = time
 
   if (renderer && entries.size > 0) {
-    const spin = prefersReducedMotion() ? 0 : SPIN_RATE * delta
+    // Held still if the shopper asked their system for less motion, or if the
+    // site owner turned the thumbnail spin off. Either one is a "no".
+    const spinning = !prefersReducedMotion() && (thumbSettings?.thumbnailAutoRotate ?? true)
+    const spin = spinning ? SPIN_RATE * delta : 0
     for (const entry of entries) {
       // A thumbnail scrolled out of the viewport is still being drawn without
       // this check, which on a long category page is a lot of GPU spent on
@@ -113,7 +125,12 @@ function start(): void {
  * Returns null when this browser cannot render at all, which the caller shows as
  * a plain still rather than a broken box.
  */
-export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D): Promise<(() => void) | null> {
+export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D, settings: P3dConfig): Promise<(() => void) | null> {
+  // Captured before the renderer is built, so getRenderer sees the owner's
+  // antialias/pixel-ratio choices on the very first thumbnail rather than a frame
+  // late. Every thumbnail passes the same settings, so a later mount overwriting
+  // this is a no-op in practice.
+  thumbSettings = settings
   const active = await getRenderer()
   if (!active) return null
   const ctx = canvas.getContext('2d')
@@ -121,7 +138,7 @@ export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D): Pr
 
   const { Scene, PerspectiveCamera } = await import('three')
   const scene = new Scene()
-  await addLights(scene, active)
+  await addLights(scene, active, settings)
   const pivot = await frameModel(scene, model)
 
   const camera = new PerspectiveCamera(40, 1, 0.1, 100)

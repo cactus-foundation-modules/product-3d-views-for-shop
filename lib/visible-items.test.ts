@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
+import { P3D_CONFIG_DEFAULTS } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/lib/types'
 
 const PARENT = 'prod-parent'
@@ -11,7 +12,7 @@ function item(key: string, productId: string, url: string): P3dItem {
 }
 
 function payload(items: P3dItem[]): P3dPayload {
-  return { parentProductId: PARENT, items }
+  return { parentProductId: PARENT, items, settings: P3D_CONFIG_DEFAULTS }
 }
 
 const keys = (items: P3dItem[]) => items.map((i) => i.key)

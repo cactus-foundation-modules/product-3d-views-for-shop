@@ -1,4 +1,5 @@
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
+import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
 // A stored 3D model row.
 export type P3dModel = {
@@ -35,6 +36,12 @@ export type P3dPayload = {
   // productId therefore belongs to one of its variations.
   parentProductId: string
   items: P3dItem[]
+  // The site owner's viewer settings, resolved once server-side and carried here
+  // rather than fetched by the browser: it is already on the wire, the shopper is
+  // waiting on this payload anyway, and a second client round-trip would only add
+  // a flash of default-lit model before the real settings arrived. Plain data,
+  // so it crosses the RSC boundary intact.
+  settings: P3dConfig
 }
 
 // One row of the editor's list: a model, plus which product it belongs to.

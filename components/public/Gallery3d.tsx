@@ -16,6 +16,7 @@ import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-mo
 import { mountThumb } from '@/modules/product-3d-views-for-shop/lib/three/thumb-stage'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { ShopGalleryExtraStageProps, ShopGalleryExtraThumbsProps } from '@/modules/shop/lib/gallery-media'
 
 // Scoped to this module's own class names, so nothing here can reach shop's
@@ -45,8 +46,9 @@ function Style() {
 // One auto-rotating thumbnail. The canvas is plain 2D and is painted by the
 // shared renderer (lib/three/thumb-stage.ts) - see there for why every thumbnail
 // on the page draws through a single WebGL context rather than one each.
-function Thumb3d({ item, active, thumbClass, thumbOnClass, onPick }: {
+function Thumb3d({ item, settings, active, thumbClass, thumbOnClass, onPick }: {
   item: P3dItem
+  settings: P3dConfig
   active: boolean
   thumbClass: string
   thumbOnClass: string
@@ -72,7 +74,7 @@ function Thumb3d({ item, active, thumbClass, thumbOnClass, onPick }: {
     loadModel(item.url, item.format)
       .then(async (model) => {
         if (cancelled) return
-        teardown = await mountThumb(canvas, model)
+        teardown = await mountThumb(canvas, model, settings)
         if (!teardown) setFailed(true)
         // Mounted after the await resolved but cancelled meanwhile: tear it
         // straight back down, or a model outlives the thumbnail that asked for it.
@@ -81,6 +83,11 @@ function Thumb3d({ item, active, thumbClass, thumbOnClass, onPick }: {
       .catch(() => { if (!cancelled) setFailed(true) })
 
     return () => { cancelled = true; teardown?.() }
+    // settings is page-static (server-resolved, never changes without a reload
+    // that remounts this), so it is read at mount rather than watched - watching a
+    // fresh object each render would rebuild every thumbnail on the page on every
+    // parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.url, item.format])
 
   return (
@@ -123,6 +130,7 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
         <Thumb3d
           key={item.key}
           item={item}
+          settings={data.settings}
           active={item.key === activeKey}
           thumbClass={thumbClass}
           thumbOnClass={thumbOnClass}
@@ -145,7 +153,7 @@ export function Gallery3dStage({ payload, itemKey, activeProductId }: ShopGaller
   return (
     <>
       <Style />
-      <Viewer3d item={item} />
+      <Viewer3d item={item} settings={data.settings} />
     </>
   )
 }
