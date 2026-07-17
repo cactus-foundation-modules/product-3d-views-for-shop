@@ -7,28 +7,26 @@
 // not, and pretending a 50 MB model is an unsaved edit - held in memory, lost on a
 // tab change, applied later - would be a lie that costs the admin their upload.
 // The Variations tab's file add-ons take the same view.
+//
+// Only the whole product's own models live here. A variation's model is set from
+// the Variations tab's 3D column (Product3dVariantColumn), right next to the
+// variation's picture - this tab has no "attach to" picker and does not list
+// per-variation models, so there is exactly one place each job is done.
 
 import { useCallback, useEffect, useState } from 'react'
 import { P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import type { P3dAdminModel, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
 
 const css = `
 .p3d-ed{display:grid;gap:1.25rem}
 .p3d-ed-head{display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap}
-.p3d-ed-field{display:grid;gap:.25rem}
-.p3d-ed-label{font-size:.8125rem;font-weight:600;color:var(--color-text-secondary)}
-.p3d-ed-select{padding:.375rem .75rem;border:1px solid var(--color-border);border-radius:6px;
-  background:var(--color-bg);color:var(--color-text);font-size:.875rem;font-family:inherit;min-width:220px}
 .p3d-ed-list{display:grid;gap:.5rem}
 .p3d-ed-row{display:flex;gap:.75rem;align-items:center;padding:.625rem .75rem;
   border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface)}
 .p3d-ed-name{font-size:.875rem;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .p3d-ed-meta{font-size:.75rem;color:var(--color-text-muted);flex:1}
-.p3d-ed-tag{font-size:.6875rem;font-weight:700;padding:2px 6px;border-radius:4px;
-  background:var(--color-bg-subtle);color:var(--color-text-secondary);border:1px solid var(--color-border);flex-shrink:0}
-.p3d-ed-tag-var{background:var(--color-primary);color:var(--color-on-primary);border-color:var(--color-primary)}
 .p3d-ed-empty{padding:1rem;border:1px dashed var(--color-border);border-radius:8px;
   color:var(--color-text-muted);font-size:.875rem}
 .p3d-ed-err{color:var(--color-danger);font-size:.8125rem;margin:0}
@@ -40,8 +38,7 @@ const fmtSize = (bytes: number): string =>
 
 export function Product3dEditor({ productId }: { productId: string }) {
   const [models, setModels] = useState<P3dAdminModel[]>([])
-  const [targets, setTargets] = useState<P3dTarget[]>([])
-  const [target, setTarget] = useState<string>(productId)
+  const [hasVariations, setHasVariations] = useState(false)
   const [loading, setLoading] = useState(true)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -51,11 +48,19 @@ export function Product3dEditor({ productId }: { productId: string }) {
   // one straight from an effect trips set-state-in-effect even though every
   // setState here lands in a callback. Same shape as shop's own MediaPickerModal.
   // Returns its promise so an upload can wait for the list it just changed.
+  //
+  // The route also returns every variant child's models and the target list the
+  // Variations tab needs - both dropped here. This tab only ever shows and adds
+  // the whole product's own models; `targets.length > 1` is kept only as the
+  // signal that the product has variations, for the fabric panel below.
   const refresh = useCallback((): Promise<void> => {
     return fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/models`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { models: P3dAdminModel[]; targets: P3dTarget[] } | null) => {
-        if (data) { setModels(data.models); setTargets(data.targets) }
+      .then((data: { models: P3dAdminModel[]; targets: { productId: string }[] } | null) => {
+        if (data) {
+          setModels(data.models.filter((m) => m.productId === productId))
+          setHasVariations(data.targets.length > 1)
+        }
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -77,8 +82,6 @@ export function Product3dEditor({ productId }: { productId: string }) {
 
   if (loading) return <p className="p3d-ed-help" style={{ padding: '1rem' }}>Loading…</p>
 
-  const hasVariations = targets.length > 1
-
   return (
     <div className="spe-panel">
       <style dangerouslySetInnerHTML={{ __html: css }} />
@@ -89,21 +92,13 @@ export function Product3dEditor({ productId }: { productId: string }) {
           {' '}<strong>GLB is the format to use</strong> if you have the choice - it packs the shape, colours and textures
           into one file. glTF, OBJ, FBX and 3DS also work, though OBJ carries no colours of its own and FBX files tend to
           be large. Up to {P3D_MAX_UPLOAD_MB} MB each.
+          {hasVariations && (
+            <> A variation gets its own model from the <strong>Variations</strong> tab, next to its picture - this is
+            for a model that shows on the whole product.</>
+          )}
         </p>
 
         <div className="p3d-ed-head">
-          {hasVariations && (
-            <div className="p3d-ed-field">
-              <label className="p3d-ed-label" htmlFor="p3d-target">Attach to</label>
-              <select id="p3d-target" className="p3d-ed-select" value={target} onChange={(e) => setTarget(e.target.value)}>
-                {targets.map((t) => (
-                  <option key={t.productId} value={t.productId}>
-                    {t.variationLabel ?? 'The whole product'}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
           <button type="button" className="btn btn-primary btn-sm" onClick={() => setPicking(true)}>
             Add a 3D model
           </button>
@@ -112,22 +107,14 @@ export function Product3dEditor({ productId }: { productId: string }) {
         {picking && (
           <Model3dPickerModal
             productId={productId}
-            targetProductId={target}
-            targetLabel={targets.find((t) => t.productId === target)?.variationLabel ?? ''}
+            targetProductId={productId}
+            targetLabel=""
             onChanged={() => void refresh()}
             onClose={() => setPicking(false)}
           />
         )}
 
         {error && <p className="p3d-ed-err">{error}</p>}
-
-        {hasVariations && (
-          <p className="p3d-ed-help">
-            Models on <strong>the whole product</strong> always show. Models on a variation show on their own until a
-            shopper picks a variation, and after that only the chosen one&rsquo;s. Where several variations share the same
-            model, add it to each - the gallery shows it once, not once per variation.
-          </p>
-        )}
 
         {models.length === 0 ? (
           <div className="p3d-ed-empty">
@@ -137,9 +124,6 @@ export function Product3dEditor({ productId }: { productId: string }) {
           <div className="p3d-ed-list">
             {models.map((m) => (
               <div key={m.id} className="p3d-ed-row">
-                <span className={`p3d-ed-tag${m.variationLabel ? ' p3d-ed-tag-var' : ''}`}>
-                  {m.variationLabel ?? 'Whole product'}
-                </span>
                 <span className="p3d-ed-name">{m.filename}</span>
                 <span className="p3d-ed-meta">{formatLabel(m.format)} · {fmtSize(m.size)}</span>
                 <button
