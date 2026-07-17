@@ -83,6 +83,93 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
   return (await entry).clone(true)
 }
 
+// Fabric textures cached by url, so re-selecting a colour is instant - no second
+// fetch, no second decode. The MASTER texture stays here and is never disposed: a
+// fabric range is a few dozen colours, which is a bounded, acceptable cache. Each
+// application clones the master (see applyFabricPaint), so a viewer owns a Texture
+// it can set its own tiling on and dispose when it swaps colour, without touching
+// the shared master another viewer may still be holding. Same "hold the promise"
+// trick as the model cache above, so concurrent callers share one load.
+const textureCache = new Map<string, Promise<Texture>>()
+
+async function loadTexture(url: string): Promise<Texture> {
+  let entry = textureCache.get(url)
+  if (!entry) {
+    const { TextureLoader } = await import('three')
+    // A failed load must not poison the cache, so a reselect after the connection
+    // came back gets a fresh attempt rather than the old rejection handed back.
+    entry = new TextureLoader().loadAsync(url).catch((error) => {
+      textureCache.delete(url)
+      throw error
+    })
+    textureCache.set(url, entry)
+  }
+  return entry
+}
+
+/**
+ * Paint one named material slot with an external texture at a given tile repeat.
+ * Only the baseColor (`map`) is replaced; the material's normalMap, roughness and
+ * the rest are left untouched, so the fabric keeps the model's own surface relief
+ * and lighting response and only its colour and weave change.
+ *
+ * Matches by the glTF material NAME, not a mesh index: that name is the contract
+ * between a saved config and the file (see lib/db/fabric-config.ts). One glTF
+ * material can back several meshes (a loader splits a multi-primitive mesh into one
+ * material each), so every material carrying the name is painted with one shared
+ * clone.
+ *
+ * Returns the Texture it set - or null when the model has no material of that name -
+ * so the caller can dispose it when it swaps it out. The caller owns that disposal;
+ * the shared master in the cache above is not ours to free here.
+ */
+export async function applyFabricPaint(
+  model: Object3D,
+  paint: { materialName: string; textureUrl: string; repeat: number },
+): Promise<Texture | null> {
+  const three = await import('three')
+  const master = await loadTexture(paint.textureUrl)
+
+  const build = (existing: Texture | null | undefined): Texture => {
+    const tex = master.clone()
+    tex.colorSpace = three.SRGBColorSpace
+    tex.wrapS = three.RepeatWrapping
+    tex.wrapT = three.RepeatWrapping
+    // glTF's UV origin is top-left, so its baseColor maps load flipY=false, while
+    // TextureLoader defaults to flipY=true - which would mirror the weave against
+    // the model's UVs. Copy the slot's own existing map where there is one (the
+    // safest match against an odd export), and default to the glTF convention where
+    // there is not.
+    if (existing) {
+      tex.flipY = existing.flipY
+      tex.channel = existing.channel
+      tex.center.copy(existing.center)
+      tex.rotation = existing.rotation
+      tex.offset.copy(existing.offset)
+    } else {
+      tex.flipY = false
+    }
+    tex.repeat.set(paint.repeat, paint.repeat)
+    return tex
+  }
+
+  let texture: Texture | null = null
+  model.traverse((child) => {
+    const mesh = child as Object3D & { material?: unknown }
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+    for (const material of materials) {
+      const mat = material as { name?: string; map?: Texture | null; needsUpdate?: boolean }
+      if (mat.name !== paint.materialName) continue
+      // Built lazily off the first matched material, then shared with the rest.
+      const tex = texture ?? (texture = build(mat.map))
+      mat.map = tex
+      mat.needsUpdate = true
+    }
+  })
+
+  return texture
+}
+
 /**
  * Centre a model on the origin and scale it to a predictable size, then drop it
  * into the scene. Models arrive in wildly different units - a chair authored in

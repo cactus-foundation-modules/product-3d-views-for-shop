@@ -1,5 +1,12 @@
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
+import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
+
+// Re-exported so consumers can reach the config shape from the one types module
+// without knowing it is defined alongside its database access. The import above is
+// type-only and erased at build, so this drags no server code (prisma, zod) into a
+// client bundle - the same bargain P3dConfig strikes from lib/config.ts.
+export type { FabricConfig }
 
 // A stored 3D model row.
 export type P3dModel = {
@@ -42,6 +49,33 @@ export type P3dPayload = {
   // a flash of default-lit model before the real settings arrived. Plain data,
   // so it crosses the RSC boundary intact.
   settings: P3dConfig
+  // The fabric configurator's config for this product, or null when the product is
+  // not configured for it (the overwhelming majority). Present only when a saved
+  // p3d_fabric_configs row names a default model - see lib/gallery-provider.ts.
+  // When set, the gallery shows one "3D configurator" thumbnail that re-textures a
+  // single model live from the shopper's variation choices, rather than one
+  // thumbnail per model file.
+  fabric: FabricConfig | null
+}
+
+// A fabric configurator resolution for one variant child: which model to draw and
+// which named material slots to paint, at what tile density. Composed server-side
+// from the child's selected options + sizes and the saved config (see
+// lib/fabric/resolve.ts), and fetched by the stage on demand keyed by child id.
+export type FabricBundle = {
+  // The p3d_models row the resolved model came from - carried so the client can
+  // key its cache and so a changed model id is visible without comparing urls.
+  modelId: string
+  modelUrl: string
+  format: P3dFormat
+  slots: Array<{
+    // The exact glTF material name to paint on the model.
+    materialName: string
+    // Public url of the fabric texture (the option value's swatch).
+    textureUrl: string
+    // Tile repeat, so the weave renders at true real-world scale: uvSpanCm/swatchCm.
+    repeat: number
+  }>
 }
 
 // One row of the editor's list: a model, plus which product it belongs to.

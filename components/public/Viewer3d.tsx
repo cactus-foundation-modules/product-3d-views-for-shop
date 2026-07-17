@@ -11,18 +11,39 @@
 // taken it up it has done its job.
 
 import { useEffect, useRef, useState } from 'react'
+import type { Object3D, Texture } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, addShadowCatcher, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
 type Status = 'loading' | 'ready' | 'failed'
 
-export function Viewer3d({ item, settings }: { item: P3dItem; settings: P3dConfig }) {
+// The fabric configurator's paints for the model on the stage: which named
+// material to texture, with what and at what tile density. Optional - a viewer
+// with no `fabric` prop behaves exactly as it always has.
+type FabricPaints = { slots: Array<{ materialName: string; textureUrl: string; repeat: number }> }
+
+export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: P3dConfig; fabric?: FabricPaints }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [status, setStatus] = useState<Status>('loading')
   const [touched, setTouched] = useState(false)
+
+  // Kept across renders so the repaint effect below can find the built model and
+  // its currently-applied fabric textures without rebuilding the whole viewer. The
+  // built model is reachable only inside build()'s closure otherwise, and a colour
+  // change must not tear down the WebGL context to swap one map.
+  const modelRef = useRef<Object3D | null>(null)
+  const builtUrlRef = useRef<string | null>(null)
+  // materialName -> the clone this viewer currently has on that slot, so a swap can
+  // dispose the outgoing one (its own per-viewer GPU allocation) without touching
+  // the shared master in the texture cache.
+  const appliedRef = useRef<Map<string, Texture>>(new Map())
+
+  // A stable signature of the paints, so the repaint effect fires on a colour change
+  // (same model, new textures) but not on every parent render handing a fresh object.
+  const fabricSignature = JSON.stringify(fabric?.slots ?? [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -73,7 +94,25 @@ export function Viewer3d({ item, settings }: { item: P3dItem; settings: P3dConfi
         // colour the moment the surface tilts away from the camera - which, on a
         // model that turns, is most of the time. Needs the renderer for its ceiling.
         applyMaxAnisotropy(model, renderer)
-        if (cancelled) { renderer.dispose(); disposeModel(model); return }
+
+        // The configurator's fabric slots, painted onto the freshly built model. A
+        // later colour change on the same model url is handled in place by the
+        // effect below; this first paint is also the one a headrest switch rebuilds
+        // through, since that changes the model url and re-runs this effect.
+        const applied = appliedRef.current
+        for (const slot of fabric?.slots ?? []) {
+          const tex = await applyFabricPaint(model, slot)
+          if (tex) applied.set(slot.materialName, tex)
+        }
+
+        if (cancelled) {
+          for (const tex of applied.values()) tex.dispose()
+          applied.clear()
+          renderer.dispose(); disposeModel(model); return
+        }
+        // Reachable by the repaint effect only now the model is built and painted.
+        modelRef.current = model
+        builtUrlRef.current = item.url
 
         // Transparent lets the page's own background through (the default, and why
         // this suits every theme untold); a colour paints behind the model; the
@@ -148,6 +187,12 @@ export function Viewer3d({ item, settings }: { item: P3dItem; settings: P3dConfi
           controls.dispose()
           disposeShadow?.()
           scene.remove(pivot)
+          // This viewer's own fabric clones, freed before the model they hang off.
+          // The masters they were cloned from stay in the shared texture cache.
+          for (const tex of appliedRef.current.values()) tex.dispose()
+          appliedRef.current.clear()
+          modelRef.current = null
+          builtUrlRef.current = null
           disposeModel(model)
           disposeEnvironment(renderer)
           // Frees the WebGL context itself. Without it, a shopper flicking between
@@ -161,6 +206,8 @@ export function Viewer3d({ item, settings }: { item: P3dItem; settings: P3dConfi
         // shadow that was never added leaves disposeShadow null, and three's
         // dispose() calls tolerate being the last thing to touch a resource.
         disposeShadow?.()
+        for (const tex of appliedRef.current.values()) tex.dispose()
+        appliedRef.current.clear()
         disposeModel(model)
         disposeEnvironment(renderer)
         renderer.dispose()
@@ -175,8 +222,40 @@ export function Viewer3d({ item, settings }: { item: P3dItem; settings: P3dConfi
     // it is read at build time rather than watched: adding the object to the deps
     // would rebuild the whole viewer on every parent render (a fresh object each
     // time), and it never changes without a reload that remounts this anyway.
+    // fabric is read here for the FIRST paint only; a colour change on the same
+    // model is handled by the repaint effect below without rebuilding the context,
+    // and a model change (headrest) alters item.url, which does re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.url, item.format])
+
+  // Repaint the fabric slots in place when the colours change but the model does
+  // not - the whole point of the configurator: a seat-colour change must not tear
+  // down and rebuild the WebGL context. Runs only once the model for the current
+  // url is built (modelRef set), and does nothing on a model change, which the
+  // build effect above already handles by rebuilding and painting in build().
+  useEffect(() => {
+    const model = modelRef.current
+    // Not built yet, or built for a different url (a rebuild is mid-flight and will
+    // paint the new colours itself) - leave it to the build effect.
+    if (!model || builtUrlRef.current !== item.url) return
+    let cancelled = false
+    const applied = appliedRef.current
+    ;(async () => {
+      for (const slot of fabric?.slots ?? []) {
+        const tex = await applyFabricPaint(model, slot)
+        if (cancelled) { tex?.dispose(); continue }
+        const previous = applied.get(slot.materialName)
+        if (previous && previous !== tex) previous.dispose()
+        if (tex) applied.set(slot.materialName, tex)
+      }
+    })()
+    return () => { cancelled = true }
+    // Keyed on the paints' signature, not the model: item.url is read inside as a
+    // guard, not a trigger, so a model change does not fire this (the build effect
+    // owns that). A fresh `fabric` object each render is why the string, not the
+    // object, is the dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fabricSignature])
 
   return (
     <div className="p3d-stage" ref={hostRef}>

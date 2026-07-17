@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dAdminModel, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
+import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
 
 const css = `
 .p3d-ed{display:grid;gap:1.25rem}
@@ -153,6 +154,11 @@ export function Product3dEditor({ productId }: { productId: string }) {
             ))}
           </div>
         )}
+
+        {/* The fabric configurator, for a product with variations. Hides itself
+            when the size attributes it needs are not installed, so a plain
+            variation product sees nothing extra. */}
+        {hasVariations && <FabricConfigPanel productId={productId} />}
       </div>
     </div>
   )

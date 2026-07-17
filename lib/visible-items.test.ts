@@ -12,7 +12,7 @@ function item(key: string, productId: string, url: string): P3dItem {
 }
 
 function payload(items: P3dItem[]): P3dPayload {
-  return { parentProductId: PARENT, items, settings: P3D_CONFIG_DEFAULTS }
+  return { parentProductId: PARENT, items, settings: P3D_CONFIG_DEFAULTS, fabric: null }
 }
 
 const keys = (items: P3dItem[]) => items.map((i) => i.key)

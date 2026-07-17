@@ -1,4 +1,5 @@
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
+import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import { getP3dConfigCached } from '@/modules/product-3d-views-for-shop/lib/config'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { Gallery3dThumbs, Gallery3dStage } from '@/modules/product-3d-views-for-shop/components/public/Gallery3d'
@@ -25,12 +26,17 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
   async load(productId: string): Promise<P3dPayload | null> {
     const models = await getModelsForProductTree(productId)
     if (models.length === 0) return null
-    // Read only once we know there is a model to draw, and cached, so a product
-    // page with no model never touches the settings table at all.
-    const settings = await getP3dConfigCached()
+    // Read only once we know there is a model to draw, and the settings are cached,
+    // so a product page with no model never touches either table at all.
+    const [settings, fabricConfig] = await Promise.all([getP3dConfigCached(), getFabricConfig(productId)])
+    // The configurator only lights up for a config that actually names a default
+    // model; an empty or half-finished row is treated as "not configured" and the
+    // gallery renders exactly as it did before, one thumbnail per model file.
+    const fabric = fabricConfig && fabricConfig.defaultModelId ? fabricConfig : null
     return {
       parentProductId: productId,
       settings,
+      fabric,
       items: models.map((m) => ({
         // The row id: stable across renders, unique within the payload, and
         // meaningless to shop, which only ever passes it back to us.
