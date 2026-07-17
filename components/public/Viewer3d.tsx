@@ -47,7 +47,10 @@ export function Viewer3d({ item }: { item: P3dItem }) {
 
       const scene = new Scene()
       await addLights(scene)
-      await frameModel(scene, model)
+      // The pivot, not the model: frameModel centres the model inside it, so
+      // OrbitControls' target (the origin) is the middle of the model rather
+      // than whatever point its file happened to be authored around.
+      const pivot = await frameModel(scene, model)
       if (cancelled) { renderer.dispose(); disposeModel(model); return }
 
       const camera = new PerspectiveCamera(40, 1, 0.1, 100)
@@ -98,7 +101,7 @@ export function Viewer3d({ item }: { item: P3dItem }) {
         if (frame !== null) cancelAnimationFrame(frame)
         observer.disconnect()
         controls.dispose()
-        scene.remove(model)
+        scene.remove(pivot)
         disposeModel(model)
         // Frees the WebGL context itself. Without it, a shopper flicking between
         // variations leaks one context per model until the browser starts killing

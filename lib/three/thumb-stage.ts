@@ -27,6 +27,9 @@ type Entry = {
   ctx: CanvasRenderingContext2D
   scene: Scene
   camera: PerspectiveCamera
+  /** What spins: the centred pivot frameModel hung the model off, never the model. */
+  pivot: Object3D
+  /** What gets disposed, and what the pivot has to be emptied of first. */
   model: Object3D
 }
 
@@ -78,7 +81,7 @@ function tick(time: number): void {
       // this check, which on a long category page is a lot of GPU spent on
       // pictures nobody is looking at.
       if (!isVisible(entry.canvas)) continue
-      entry.model.rotation.y += spin
+      entry.pivot.rotation.y += spin
       const { width, height } = entry.canvas
       if (width === 0 || height === 0) continue
       renderer.setSize(width, height, false)
@@ -119,19 +122,19 @@ export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D): Pr
   const { Scene, PerspectiveCamera } = await import('three')
   const scene = new Scene()
   await addLights(scene)
-  await frameModel(scene, model)
+  const pivot = await frameModel(scene, model)
 
   const camera = new PerspectiveCamera(40, 1, 0.1, 100)
   camera.position.set(0, 0.6, 4)
   camera.lookAt(0, 0, 0)
 
-  const entry: Entry = { canvas, ctx, scene, camera, model }
+  const entry: Entry = { canvas, ctx, scene, camera, pivot, model }
   entries.add(entry)
   start()
 
   return () => {
     entries.delete(entry)
-    scene.remove(model)
+    scene.remove(pivot)
     disposeModel(model)
     // The shared renderer outlives any one thumbnail - it is the page's, not
     // this entry's - but with nothing left to draw there is no reason to hold a

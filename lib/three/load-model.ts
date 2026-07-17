@@ -72,30 +72,37 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
  * model's own bounding box is the only way one camera position suits them all.
  * Without this, half of what an admin uploads renders as either a speck or an
  * invisible wall of polygons filling the near plane.
+ *
+ * Returns the PIVOT the model now hangs off, not the model: rotate that. The
+ * model's own origin is wherever the exporter left it, which for a real product
+ * file is nowhere near the middle of the thing - the Chiro Plus's chair sits a
+ * metre and a half off its file's origin, because the authoring tool wrote out
+ * the whole showroom's coordinates. Turning the model itself therefore swings it
+ * round a point out in space like a rider on a carousel: it leaves the frame
+ * entirely and comes back, which is why the thumbnails looked empty most of the
+ * time. Centring inside a pivot puts the axis through the model's own middle, so
+ * turning it looks like turning it.
  */
-export async function frameModel(scene: Scene, model: Object3D, fitTo = 2): Promise<void> {
-  const { Box3, Vector3 } = await import('three')
-  const box = new Box3().setFromObject(model)
-  const size = box.getSize(new Vector3())
-  const centre = box.getCenter(new Vector3())
+export async function frameModel(scene: Scene, model: Object3D, fitTo = 2): Promise<Object3D> {
+  const { Box3, Group, Vector3 } = await import('three')
+  const size = new Box3().setFromObject(model).getSize(new Vector3())
 
   const largest = Math.max(size.x, size.y, size.z)
   // A degenerate box (an empty or unparseable model) would divide by zero and
   // scale the thing to infinity, so leave it alone and let it render as whatever
   // it is rather than as NaN.
-  if (largest > 0 && Number.isFinite(largest)) {
-    const scale = fitTo / largest
-    model.scale.setScalar(scale)
-    // Re-measured after scaling rather than multiplying the old centre through:
-    // the two agree for a plain scale and stop agreeing the moment a loader
-    // hands back a model with a transform already on its root, which FBX
-    // routinely does.
-    const scaled = new Box3().setFromObject(model)
-    model.position.sub(scaled.getCenter(new Vector3()))
-  } else {
-    model.position.sub(centre)
-  }
-  scene.add(model)
+  if (largest > 0 && Number.isFinite(largest)) model.scale.setScalar(fitTo / largest)
+
+  // Re-measured after scaling rather than multiplying the old centre through:
+  // the two agree for a plain scale and stop agreeing the moment a loader hands
+  // back a model with a transform already on its root, which FBX routinely does.
+  const centre = new Box3().setFromObject(model).getCenter(new Vector3())
+  model.position.sub(centre)
+
+  const pivot = new Group()
+  pivot.add(model)
+  scene.add(pivot)
+  return pivot
 }
 
 /**
