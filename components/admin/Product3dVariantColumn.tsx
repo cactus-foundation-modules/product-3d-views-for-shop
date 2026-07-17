@@ -18,10 +18,11 @@
 // and knows nothing about what fills it - a site running variations without this
 // module installed has no such column.
 
-import { useRef, useState, type CSSProperties, type DragEvent } from 'react'
-import { P3D_ACCEPT, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
+import { useState, type CSSProperties, type DragEvent } from 'react'
+import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
 import { reloadProductModels, useProductModels } from '@/modules/product-3d-views-for-shop/lib/use-product-models'
+import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 
 const box: CSSProperties = {
   width: 36, height: 36, borderRadius: 'var(--radius-md)',
@@ -45,8 +46,8 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
   const models = useProductModels(productId)
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
 
   const mine = (models ?? []).filter((m) => m.productId === childProductId)
 
@@ -83,6 +84,7 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
   }
 
   return (
+    <>
     <span
       onDragEnter={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragOver(true) } }}
       onDragOver={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragOver(true) } }}
@@ -114,22 +116,9 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
           </span>
         ))}
 
-        <input
-          ref={fileRef}
-          type="file"
-          accept={P3D_ACCEPT}
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) void upload(f)
-            // Cleared so picking the same file twice in a row still fires a change
-            // event - re-uploading after a failure is exactly that.
-            e.target.value = ''
-          }}
-        />
         <button
           type="button"
-          onClick={() => fileRef.current?.click()}
+          onClick={() => setPicking(true)}
           disabled={uploading}
           style={{
             ...box,
@@ -138,8 +127,8 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
             color: dragOver ? 'var(--color-primary)' : 'var(--color-text-muted)',
             cursor: uploading ? 'progress' : 'pointer',
           }}
-          aria-label={`Add a 3D model to ${label}, or drop one here`}
-          title="Click to choose a 3D file, or drop one here"
+          aria-label={`Add a 3D model to ${label}: choose an existing file or upload one, or drop one here`}
+          title="Click to choose an existing 3D file or upload one, or drop one here"
         >
           {uploading ? '…' : '＋'}
         </button>
@@ -151,5 +140,16 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
         </span>
       )}
     </span>
+
+    {picking && (
+      <Model3dPickerModal
+        productId={productId}
+        targetProductId={childProductId}
+        targetLabel={label}
+        onChanged={() => void reloadProductModels(productId)}
+        onClose={() => setPicking(false)}
+      />
+    )}
+    </>
   )
 }

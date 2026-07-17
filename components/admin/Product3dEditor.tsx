@@ -8,10 +8,10 @@
 // tab change, applied later - would be a lie that costs the admin their upload.
 // The Variations tab's file add-ons take the same view.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { P3D_ACCEPT, P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
+import { useCallback, useEffect, useState } from 'react'
+import { P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dAdminModel, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
+import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 
 const css = `
 .p3d-ed{display:grid;gap:1.25rem}
@@ -42,9 +42,8 @@ export function Product3dEditor({ productId }: { productId: string }) {
   const [targets, setTargets] = useState<P3dTarget[]>([])
   const [target, setTarget] = useState<string>(productId)
   const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
+  const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
 
   // A promise chain rather than an async function, and deliberately: an async
   // body's opening statements read as synchronous to the effect lint, so calling
@@ -62,19 +61,6 @@ export function Product3dEditor({ productId }: { productId: string }) {
   }, [productId])
 
   useEffect(() => { void refresh() }, [refresh])
-
-  async function upload(file: File) {
-    setUploading(true)
-    setError(null)
-    try {
-      await uploadModel(file, { productId, targetProductId: target })
-      await refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'That model could not be uploaded.')
-    } finally {
-      setUploading(false)
-    }
-  }
 
   async function remove(id: string) {
     setError(null)
@@ -117,23 +103,20 @@ export function Product3dEditor({ productId }: { productId: string }) {
               </select>
             </div>
           )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept={P3D_ACCEPT}
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) void upload(f)
-              // Cleared so picking the same file twice in a row still fires a
-              // change event - re-uploading after a failure is exactly that.
-              e.target.value = ''
-            }}
-          />
-          <button type="button" className="btn btn-primary btn-sm" disabled={uploading} onClick={() => fileRef.current?.click()}>
-            {uploading ? 'Uploading…' : 'Add a 3D model'}
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setPicking(true)}>
+            Add a 3D model
           </button>
         </div>
+
+        {picking && (
+          <Model3dPickerModal
+            productId={productId}
+            targetProductId={target}
+            targetLabel={targets.find((t) => t.productId === target)?.variationLabel ?? ''}
+            onChanged={() => void refresh()}
+            onClose={() => setPicking(false)}
+          />
+        )}
 
         {error && <p className="p3d-ed-err">{error}</p>}
 
@@ -141,7 +124,7 @@ export function Product3dEditor({ productId }: { productId: string }) {
           <p className="p3d-ed-help">
             Models on <strong>the whole product</strong> always show. Models on a variation show on their own until a
             shopper picks a variation, and after that only the chosen one&rsquo;s. Where several variations share the same
-            model, upload it against each - the gallery shows it once, not once per variation.
+            model, add it to each - the gallery shows it once, not once per variation.
           </p>
         )}
 

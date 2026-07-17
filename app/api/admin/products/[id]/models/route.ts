@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/db/prisma'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
 import { resolveFolderPath } from '@/lib/media/organise'
 import { saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
@@ -46,9 +47,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: 'Media storage is not set up yet. Add a provider in Settings → Media first.' }, { status: 503 })
   }
 
-  return request.headers.get('content-type')?.includes('application/json')
-    ? recordDirect(request, id, provider, gate.user.id)
-    : uploadThroughServer(request, id, provider, gate.user.id)
+  if (request.headers.get('content-type')?.includes('application/json')) {
+    const body = await request.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Bad request' }, { status: 400 })
+    }
+    // Two JSON shapes share this route. A `mediaId` means "attach a file already
+    // in the library" - the pick-existing path, no bytes moving. Anything else is
+    // the second half of a fresh upload, whose bytes are already in storage.
+    return typeof (body as Record<string, unknown>).mediaId === 'string'
+      ? attachExisting(body as Record<string, unknown>, id)
+      : recordDirect(body as Record<string, unknown>, id, provider, gate.user.id)
+  }
+  return uploadThroughServer(request, id, provider, gate.user.id)
 }
 
 type Provider = NonNullable<Awaited<ReturnType<typeof getActiveMediaProvider>>>
@@ -62,8 +73,7 @@ type Provider = NonNullable<Awaited<ReturnType<typeof getActiveMediaProvider>>>
  * the signature covers, so it is the only claim here that cannot be edited in
  * flight. Same reasoning as core's /api/admin/media/record.
  */
-async function recordDirect(request: NextRequest, id: string, provider: Provider, userId: string) {
-  const body = await request.json().catch(() => null)
+async function recordDirect(body: Record<string, unknown>, id: string, provider: Provider, userId: string) {
   const key = typeof body?.key === 'string' ? body.key : ''
   const token = typeof body?.token === 'string' ? body.token : ''
   const filename = typeof body?.filename === 'string' ? body.filename : ''
@@ -127,6 +137,71 @@ async function recordDirect(request: NextRequest, id: string, provider: Provider
   } catch (error) {
     return NextResponse.json(
       { error: `Could not save that model: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      { status: 500 },
+    )
+  }
+}
+
+/**
+ * Attach a 3D file already in the media library, chosen through the picker rather
+ * than uploaded. No bytes move: the object is where it has always been, so this
+ * only writes our own row pointing at it - the same shape a fresh upload leaves
+ * behind, minus the transfer.
+ *
+ * The media row is the sole source of truth for the object. The browser hands back
+ * only its id; the key, url, provider and size are read from the row here, never
+ * taken from the request, so a client cannot name one file and attach another.
+ *
+ * A picked file that is not a 3D model is turned away: the library's "other" tab
+ * holds PDFs and the like alongside models, and the picker filters by extension,
+ * but the extension is checked again here rather than trusted from the browser.
+ */
+async function attachExisting(body: Record<string, unknown>, id: string) {
+  const mediaId = typeof body?.mediaId === 'string' ? body.mediaId : ''
+  const rawTarget = body?.targetProductId
+  const targetProductId = typeof rawTarget === 'string' && rawTarget ? rawTarget : id
+
+  if (!mediaId) {
+    return NextResponse.json({ error: 'No file was chosen.' }, { status: 400 })
+  }
+  if (!(await isValidTarget(id, targetProductId))) {
+    return NextResponse.json({ error: 'That variation does not belong to this product.' }, { status: 400 })
+  }
+
+  const media = await prisma.media.findUnique({
+    where: { id: mediaId },
+    select: { id: true, key: true, url: true, provider: true, originalName: true, sizeBytes: true },
+  })
+  if (!media) {
+    return NextResponse.json({ error: 'That file is no longer in your media library.' }, { status: 404 })
+  }
+
+  // The uploaded filename decides the format where it survives; the storage key,
+  // whose extension core bakes from the media type, is the fallback for rows that
+  // never kept one. See lib/formats.ts for why the extension and not the MIME.
+  const format = formatFromFilename(media.originalName ?? media.key)
+  if (!format) {
+    return NextResponse.json(
+      { error: 'That file is not a 3D model. Use GLB, glTF, OBJ, FBX or 3DS.' },
+      { status: 400 },
+    )
+  }
+
+  try {
+    const model = await createModel({
+      productId: targetProductId,
+      url: media.url,
+      mediaProvider: media.provider,
+      mediaKey: media.key,
+      mediaId: media.id,
+      filename: media.originalName || media.key.split('/').pop() || `model.${format}`,
+      format,
+      size: media.sizeBytes,
+    })
+    return NextResponse.json(model, { status: 201 })
+  } catch (error) {
+    return NextResponse.json(
+      { error: `Could not add that model: ${error instanceof Error ? error.message : 'Unknown error'}` },
       { status: 500 },
     )
   }

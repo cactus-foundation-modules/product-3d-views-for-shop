@@ -9,7 +9,7 @@ Requires the [shop](https://github.com/cactus-foundation-modules/shop) module (v
 ## What it does
 
 - **Models on products and on variations.** A "3D views" tab appears in the product editor. Where a product has variations, each one can carry its own model - an oak version and a walnut version of the same chair.
-- **A 3D column on the Variations tab.** With shop-variations installed, a **3D** column sits beside the Image column: drop a model onto a variant row exactly as you would a photograph. The "3D views" tab's dropdown does the same job and remains the only way to reach the whole product.
+- **A 3D column on the Variations tab.** With shop-variations installed, a **3D** column sits beside the Image column, and adds a model to a variant exactly as the Image column adds a picture: choose a file already in your media library or upload a new one, or drop a file straight onto the row. The "3D views" tab's dropdown does the same job and remains the only way to reach the whole product.
 - **A thumbnail in the strip, not a widget bolted alongside.** The 3D thumbnail sits in the gallery's own strip, styled by whatever layout the page uses, so shoppers meet it exactly where they already look for more pictures.
 - **Turn, pan and zoom.** Picking the thumbnail hands the gallery's main image over to a viewer. It rotates on its own until the shopper takes hold of it, and then stops getting in their way.
 - **Follows the shopper's choice.** With models on the variations and none on the product itself, all of them show until a variation is picked - after which only that variation's does.
