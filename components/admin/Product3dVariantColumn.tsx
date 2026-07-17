@@ -1,7 +1,9 @@
 'use client'
 
 // The 3D column on the Variations tab, one cell per variant, contributed through
-// shop-variations' `shop-variations.variant-columns` point.
+// shop-variations' `shop-variations.variant-field-provider` point (see
+// lib/variant-field-provider.ts). That same provider carries the column through
+// the CSV export/import, so the Google Sheet sync round-trips a variant's 3D files.
 //
 // This is the same job the 3D views tab does through its "Attach to" dropdown, put
 // where the admin already is: setting a variation's picture and setting its model

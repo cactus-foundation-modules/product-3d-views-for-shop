@@ -1,4 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
+import { deleteMedia } from '@/lib/media/upload'
+import type { MediaProviderType } from '@prisma/client'
 import type { P3dAdminModel, P3dModel, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
@@ -181,4 +183,38 @@ export async function createModel(input: {
 
 export async function deleteModel(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "p3d_models" WHERE "id" = ${id}`
+}
+
+/** Models attached directly to any of the given products (no variation tree walk). */
+export async function getModelsForProducts(productIds: string[]): Promise<P3dModel[]> {
+  if (productIds.length === 0) return []
+  const rows = await prisma.$queryRaw<ModelRow[]>`
+    SELECT "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
+           "media_key" AS "mediaKey", "media_id" AS "mediaId", "filename", "format",
+           "size", "position"
+    FROM "p3d_models"
+    WHERE "product_id" = ANY(${productIds}::text[])
+    ORDER BY "position", "created_at"
+  `
+  return rows.map(toModel)
+}
+
+/**
+ * Remove a model everywhere: our row, the core library row, and the stored blob.
+ * The blob matters - a 3D file runs to tens of megabytes, so a row-only delete
+ * would bill the owner for bytes nothing references. Shared by the delete route
+ * and the Google Sheet import, which drops a model when its url leaves a variant's
+ * cell. Tidying failures are logged, not thrown: the row is already gone, which is
+ * what "deleted" means to the shop.
+ */
+export async function deleteModelCascade(model: P3dModel): Promise<void> {
+  await deleteModel(model.id)
+  if (model.mediaId) {
+    await prisma.media.delete({ where: { id: model.mediaId } }).catch(() => {})
+  }
+  if (model.mediaKey && model.mediaProvider) {
+    await deleteMedia(model.mediaProvider as MediaProviderType, model.mediaKey).catch((error: unknown) => {
+      console.error(`[product-3d-views-for-shop] could not delete blob ${model.mediaKey}:`, error)
+    })
+  }
 }
