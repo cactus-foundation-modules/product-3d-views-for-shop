@@ -264,20 +264,20 @@ export function Settings3dTab() {
           <input type="checkbox" checked={config.autoRotate} onChange={(e) => set('autoRotate', e.target.checked)} />
           Turn the model slowly until the shopper grabs it
         </label>
-        <label style={{ ...checkboxRow, opacity: config.autoRotate ? 1 : 0.5 }}>
+        <label style={checkboxRow}>
           <input
             type="checkbox"
             checked={config.spinModel}
-            disabled={!config.autoRotate}
             onChange={(e) => set('spinModel', e.target.checked)}
           />
           Spin the model itself, and leave its shadow where it is
         </label>
         <p style={{ ...sectionNote, marginTop: '-0.5rem' }}>
-          Off, the view drifts around a model that stays put, and the shadow travels round with it. On, the
-          model turns on the spot while its shadow stays anchored to the floor beneath, which is what makes the
-          turning obvious. Needs shadows switched on above to be worth anything. Only changes the slow idle
-          spin - dragging by hand works the same either way.
+          Off, everything moves together: the idle spin and a shopper&rsquo;s drag both swing the view around
+          the model, so its shadow appears to travel round with it. On, the model itself turns on the spot -
+          idling or dragged sideways - while the shadow stays anchored to the floor beneath, changing shape as
+          the model turns, which is what makes the turning obvious. Dragging up and down still tilts the view.
+          Needs shadows switched on above to be worth anything.
         </p>
         <label style={checkboxRow}>
           <input type="checkbox" checked={config.enablePan} onChange={(e) => set('enablePan', e.target.checked)} />

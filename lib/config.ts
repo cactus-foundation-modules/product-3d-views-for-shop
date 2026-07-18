@@ -74,16 +74,15 @@ export const P3dConfigSchema = z
     // asked for less movement, not an override of the ones who have.
     autoRotate: z.boolean().default(true),
     autoRotateSpeed: z.number().min(0.1).max(10).default(1.2),
-    // Off keeps the historic behaviour: auto-rotate orbits the camera around a
-    // still model - a person walking round a fixed object. On turns the model
-    // itself instead, the way the thumbnails already spin (see thumb-stage), and
-    // freezes the shadow map so the shadow stays anchored to the floor while the
-    // model rotates above it. The freeze is the point: with a live shadow map the
-    // shadow re-projects the turning silhouette every frame and travels round with
-    // the model, which looks identical to the camera orbiting - so without it the
-    // setting appears to do nothing. Only affects the idle spin; a shopper's drag
-    // still orbits the camera either way, and auto-rotate stops for good on first
-    // touch regardless.
+    // Off keeps the historic behaviour: the camera does everything - auto-rotate
+    // orbits it, and a drag swings it round a still model, shadow and all. On, the
+    // MODEL is the thing that turns, idle spin and horizontal drag alike, while
+    // the camera, the light and the floor hold still: the shadow stays anchored
+    // to the floor beneath and its silhouette follows the turning model (the
+    // shadow map stays live; the light never moves, so the shadow cannot travel).
+    // Vertical drag still tilts the view, zoom and pan are unchanged, and the
+    // idle spin stops for good on first touch either way. Governs the drag even
+    // when autoRotate is off - it picks WHAT a drag turns, not just what idles.
     spinModel: z.boolean().default(false),
     enablePan: z.boolean().default(true),
     // The bounds that stop a shopper zooming through the model or pushing it away

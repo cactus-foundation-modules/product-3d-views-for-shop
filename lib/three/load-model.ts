@@ -80,7 +80,25 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
   // Every caller gets its own copy. The cached object is a shared parse result;
   // handing the same instance to two scenes would have them fight over one
   // transform, so the thumbnail and the stage would drag each other around.
-  return (await entry).clone(true)
+  //
+  // Materials get their own clones too, because Object3D.clone(true) SHARES them
+  // by reference - and applyFabricPaint mutates material.map in place. Shared,
+  // painting the stage viewer's seat painted the cached master and every
+  // thumbnail cloned from it, and the next clone of the same file arrived
+  // pre-painted in whatever colour the last viewer left on it - stale fabric on
+  // a product-level model that was never meant to be painted at all. Materials
+  // are small CPU-side state, so cloning them is cheap; the textures they point
+  // at stay shared, which is both the expensive part and the safe part (nothing
+  // here mutates a texture in place - a paint swaps the reference).
+  const instance = (await entry).clone(true)
+  instance.traverse((child) => {
+    const mesh = child as Object3D & { material?: Material | Material[] }
+    if (!mesh.material) return
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map((m) => m.clone())
+      : mesh.material.clone()
+  })
+  return instance
 }
 
 /**
@@ -542,10 +560,12 @@ const SHADOW_QUALITY: Record<P3dConfig['shadowSoftness'], { mapSize: number; rad
  * would drag a baked-in shadow round with them.
  *
  * The plane sits at the model's own base, found from its post-frame bounding box,
- * so it grounds the model rather than floating under or clipping through it. The
- * camera orbits (autoRotate moves the camera, not the model), so the model and
- * its shadow hold still while the view goes round - which is what a real object
- * on a surface does.
+ * so it grounds the model rather than floating under or clipping through it. In
+ * camera-orbit mode the model and its shadow hold still while the view goes
+ * round - what a real object on a surface does. In spin mode the model turns
+ * while this plane and the light stay fixed, so the shadow stays anchored here
+ * and only its silhouette follows the turning model (the caller keeps the shadow
+ * map live for that - see Viewer3d).
  *
  * Returns a teardown for the plane's geometry and material; the caller already
  * disposes the model and renderer, this is the one thing here it did not make.

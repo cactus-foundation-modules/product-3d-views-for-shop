@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -151,20 +151,19 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
             softness: settings.shadowSoftness,
             opacity: settings.shadowOpacity,
           })
-          // Freeze the shadow when the model is the thing that turns. A live shadow
-          // map re-projects the model's silhouette every frame, so a spinning model
-          // drags its shadow round with it and the two read as welded together -
-          // which is exactly what the camera-orbit mode already looked like, and why
-          // switching between the two appeared to change nothing at all. Baking the
-          // map once and never updating it pins the shadow to the floor, so the model
-          // visibly turns *within* its own shadow rather than carrying it along.
+          // In camera-orbit mode nothing in the WORLD ever moves - only the camera
+          // does, and a shadow map lives in the light's view, not the camera's - so
+          // the map is baked once here and the per-frame shadow pass saved. In spin
+          // mode the map stays LIVE: the model is the thing that turns, and with the
+          // light and the floor fixed the shadow cannot travel - it stays anchored
+          // under the model while its silhouette follows the turning shape, which is
+          // what a real object turning on a surface does. (v0.1.24 had this inverted:
+          // it froze the map for spin mode, which anchored the shadow by petrifying
+          // its shape - the outline never followed the model round.)
           //
           // autoUpdate false stops the per-frame render; needsUpdate true buys exactly
           // one, which the first frame below spends (three clears the flag itself).
-          // Not physics - a real object's shadow does turn with it - but the whole
-          // point here is that the spin should be legible, and an anchored shadow is
-          // what makes it so. Cheaper too: no shadow-map pass per frame.
-          if (settings.spinModel) {
+          if (!settings.spinModel) {
             renderer.shadowMap.autoUpdate = false
             renderer.shadowMap.needsUpdate = true
           }
@@ -185,28 +184,85 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // do by accident on a trackpad and neither has an obvious way back.
         controls.minDistance = settings.minDistance
         controls.maxDistance = settings.maxDistance
+
+        // Two kinds of viewer, picked by spinModel. Off (the historic default): the
+        // camera does everything - auto-rotate orbits it, and a drag swings it round
+        // a still model. On: the MODEL is the thing that turns, idle or dragged,
+        // while the camera, the light and the floor hold still - which is what keeps
+        // the shadow anchored to the floor while the model turns within it. For that
+        // to hold under a drag too, a horizontal drag must NOT orbit the camera:
+        // orbiting moves the whole world in view, shadow and floor included, which
+        // reads as the shadow travelling round with the model - the exact complaint
+        // spin mode exists to fix. So the azimuth is locked to where it starts and
+        // horizontal drag is re-pointed at the pivot below; vertical tilt, zoom and
+        // pan stay the camera's.
+        const spinMode = settings.spinModel
+        if (spinMode) {
+          const azimuth = controls.getAzimuthalAngle()
+          controls.minAzimuthAngle = azimuth
+          controls.maxAzimuthAngle = azimuth
+        }
+
         // The site owner's choice, but a shopper who asked their system for less
         // movement still overrides it - reduced motion is theirs to set, not the
-        // owner's to switch off.
+        // owner's to switch off. Only the IDLE motion is gated: a drag is the
+        // shopper's own hand, and motion they cause is theirs to cause.
         const wantsMotion =
           settings.autoRotate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-        // Two ways to satisfy "auto-rotate", picked by spinModel: orbit the camera
-        // around a still model (the historic default), or turn the model itself while
-        // the camera, the light and the now-frozen shadow all hold still. Only one is
-        // ever live at a time.
-        controls.autoRotate = wantsMotion && !settings.spinModel
+        controls.autoRotate = wantsMotion && !spinMode
         controls.autoRotateSpeed = settings.autoRotateSpeed
         // Per-frame turn for the model-spin path, matched to OrbitControls' own
         // auto-rotation step so both modes read at the same speed for a given
         // autoRotateSpeed.
         const spinStep = ((2 * Math.PI) / 60 / 60) * settings.autoRotateSpeed
-        let spinModel = wantsMotion && settings.spinModel
+        let idleSpin = wantsMotion && spinMode
         controls.addEventListener('start', () => {
           // First touch stops the idle motion for good, whichever mode it was.
           controls.autoRotate = false
-          spinModel = false
+          idleSpin = false
           setTouched(true)
         })
+
+        // The drag half of spin mode: horizontal pointer movement turns the pivot
+        // (the camera's azimuth being locked above), scaled so a drag across the
+        // stage's full height is one whole turn - the same ratio OrbitControls uses
+        // for its own orbit, so the model under the finger feels like the camera
+        // used to. A release hands the last frame's motion to the loop as velocity,
+        // decayed by the same damping factor the controls use, so a flick glides
+        // and settles rather than stopping dead.
+        let dragPointer: number | null = null
+        let dragLastX = 0
+        let spinVelocity = 0
+        const onPointerDown = (e: PointerEvent): void => {
+          // A second finger is a pinch, and a non-left mouse button is OrbitControls'
+          // pan or dolly: hand those to the controls, and stop steering the model so
+          // neither jiggles the spin.
+          if (!e.isPrimary || e.button !== 0) { dragPointer = null; return }
+          idleSpin = false
+          setTouched(true)
+          dragPointer = e.pointerId
+          dragLastX = e.clientX
+          spinVelocity = 0
+        }
+        const onPointerMove = (e: PointerEvent): void => {
+          if (dragPointer !== e.pointerId) return
+          const turn = (2 * Math.PI * (e.clientX - dragLastX)) / Math.max(host!.clientHeight, 1)
+          dragLastX = e.clientX
+          pivot.rotation.y += turn
+          spinVelocity = turn
+        }
+        const onPointerEnd = (e: PointerEvent): void => {
+          if (dragPointer === e.pointerId) dragPointer = null
+        }
+        if (spinMode) {
+          // OrbitControls captures the pointer on this same canvas when a drag
+          // starts, so the move and up events keep arriving here even when the
+          // pointer leaves the stage mid-drag.
+          canvas!.addEventListener('pointerdown', onPointerDown)
+          canvas!.addEventListener('pointermove', onPointerMove)
+          canvas!.addEventListener('pointerup', onPointerEnd)
+          canvas!.addEventListener('pointercancel', onPointerEnd)
+        }
 
         // The stage is square-ish but sized by shop's layout, so the canvas follows
         // the box rather than the other way round - a fixed size here would letterbox
@@ -224,10 +280,16 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
 
         const loop = (): void => {
           frame = requestAnimationFrame(loop)
-          // Turn the model, not the camera. The light and the shadow-catcher plane are
-          // scene-level and the shadow map is frozen above, so the shadow stays put on
-          // the floor while the model rotates above it.
-          if (spinModel) pivot.rotation.y += spinStep
+          // The model-spin path: the idle turn, or the glide left over from a drag.
+          // The light and the shadow-catcher plane are scene-level and never move,
+          // so the live shadow map keeps the shadow anchored on the floor while its
+          // silhouette follows the model turning above it.
+          if (idleSpin) {
+            pivot.rotation.y += spinStep
+          } else if (dragPointer === null && Math.abs(spinVelocity) > 0.0001) {
+            pivot.rotation.y += spinVelocity
+            spinVelocity *= 1 - settings.dampingFactor
+          }
           controls.update()
           renderer.render(scene, camera)
         }
@@ -237,6 +299,12 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         dispose = () => {
           if (frame !== null) cancelAnimationFrame(frame)
           observer.disconnect()
+          if (spinMode) {
+            canvas!.removeEventListener('pointerdown', onPointerDown)
+            canvas!.removeEventListener('pointermove', onPointerMove)
+            canvas!.removeEventListener('pointerup', onPointerEnd)
+            canvas!.removeEventListener('pointercancel', onPointerEnd)
+          }
           controls.dispose()
           disposeShadow?.()
           scene.remove(pivot)
@@ -295,6 +363,15 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
     const applied = appliedRef.current
     ;(async () => {
       for (const slot of fabric?.slots ?? []) {
+        // The texture is fetched BEFORE the cancelled check, not inside
+        // applyFabricPaint alone: applyFabricPaint stamps the material the moment
+        // its await resolves, so a slow fetch for a colour the shopper has since
+        // left could land after the newer colour's near-instant cached paint and
+        // stamp the stale texture over it. Warming the cache first turns the
+        // stamp itself near-synchronous, and the cancelled check between the two
+        // stops the superseded run before it can touch the material.
+        await prefetchTexture(slot.textureUrl)
+        if (cancelled) return
         const tex = await applyFabricPaint(model, slot)
         if (cancelled) { tex?.dispose(); continue }
         const previous = applied.get(slot.materialName)
