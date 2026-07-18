@@ -213,7 +213,9 @@ export function Settings3dTab() {
             min={0.1} max={3} step={0.05}
             disabled={exposureDisabled}
             onChange={(v) => set('exposure', v)}
-            help={exposureDisabled ? 'Pick a colour handling other than None to use this.' : undefined}
+            help={exposureDisabled
+              ? 'Pick a colour handling other than None to use this.'
+              : 'The whole catalogue starts here. One product needing its own brightness sets it on its 3D views tab.'}
           />
         </div>
 

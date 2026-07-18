@@ -13,8 +13,10 @@
 // variation's picture - this tab has no "attach to" picker and does not list
 // per-variation models, so there is exactly one place each job is done.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
+import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
+import type { P3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
 import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
@@ -31,6 +33,16 @@ const css = `
   color:var(--color-text-muted);font-size:.875rem}
 .p3d-ed-err{color:var(--color-danger);font-size:.8125rem;margin:0}
 .p3d-ed-help{color:var(--color-text-muted);font-size:.8125rem;margin:0;line-height:1.5}
+.p3d-ed-viewer{display:grid;gap:.625rem;padding:.75rem;border:1px solid var(--color-border);
+  border-radius:8px;background:var(--color-surface)}
+.p3d-ed-viewer h4{margin:0;font-size:.875rem;color:var(--color-text)}
+.p3d-ed-viewer-row{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap}
+.p3d-ed-viewer-row label{display:flex;gap:.5rem;align-items:center;font-size:.875rem;
+  color:var(--color-text);cursor:pointer}
+.p3d-ed-viewer-slider{display:flex;gap:.75rem;align-items:center;flex:1;min-width:14rem}
+.p3d-ed-viewer-slider input[type=range]{flex:1}
+.p3d-ed-viewer-val{font-size:.8125rem;color:var(--color-text-muted);
+  font-variant-numeric:tabular-nums;min-width:2.5rem;text-align:right}
 `
 
 const fmtSize = (bytes: number): string =>
@@ -38,6 +50,7 @@ const fmtSize = (bytes: number): string =>
 
 export function Product3dEditor({ productId }: { productId: string }) {
   const [models, setModels] = useState<P3dAdminModel[]>([])
+  const [treeHasModels, setTreeHasModels] = useState(false)
   const [hasVariations, setHasVariations] = useState(false)
   const [loading, setLoading] = useState(true)
   const [picking, setPicking] = useState(false)
@@ -59,6 +72,9 @@ export function Product3dEditor({ productId }: { productId: string }) {
       .then((data: { models: P3dAdminModel[]; targets: { productId: string }[] } | null) => {
         if (data) {
           setModels(data.models.filter((m) => m.productId === productId))
+          // The unfiltered list covers the variations' models too - what decides
+          // whether the viewer settings below have anything to act on.
+          setTreeHasModels(data.models.length > 0)
           setHasVariations(data.targets.length > 1)
         }
         setLoading(false)
@@ -139,11 +155,106 @@ export function Product3dEditor({ productId }: { productId: string }) {
           </div>
         )}
 
+        {/* Per-product viewer overrides. Only shown once there is a model
+            somewhere on the product for them to act on - the whole tree counts,
+            because a variation's model is lit by the parent's override too. */}
+        {treeHasModels && <ViewerSettingsPanel productId={productId} />}
+
         {/* The fabric configurator, for a product with variations. Hides itself
             when the size attributes it needs are not installed, so a plain
             variation product sees nothing extra. */}
         {hasVariations && <FabricConfigPanel productId={productId} />}
       </div>
+    </div>
+  )
+}
+
+// The per-product viewer settings (today: brightness alone), saved as you go
+// like everything else on this tab - a debounced PUT per change rather than a
+// Save button, because one slider with a Save button is more ceremony than
+// setting. The sitewide values ride along on the GET so the panel can grey
+// itself out while the site's colour handling is None (brightness is inert
+// without a tone curve) and can rest the slider on what "the site setting"
+// currently is.
+function ViewerSettingsPanel({ productId }: { productId: string }) {
+  const [config, setConfig] = useState<P3dProductConfig | null>(null)
+  const [site, setSite] = useState<Pick<P3dConfig, 'toneMapping' | 'exposure'> | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/settings`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { config: P3dProductConfig; site: Pick<P3dConfig, 'toneMapping' | 'exposure'> } | null) => {
+        if (cancelled || !data) return
+        setConfig(data.config)
+        setSite(data.site)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [productId])
+
+  // Update locally at once, persist shortly after the last change. The timer
+  // carries the value it was armed with, so a slower earlier save can never
+  // overwrite a later drag.
+  const apply = useCallback((next: P3dProductConfig) => {
+    setConfig(next)
+    setError(null)
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => {
+      fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      })
+        .then(async (r) => {
+          if (!r.ok) setError((await r.json().catch(() => ({}))).error ?? 'Could not save the brightness.')
+        })
+        .catch(() => setError('Could not save the brightness. Check your connection.'))
+    }, 400)
+  }, [productId])
+
+  useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current) }, [])
+
+  if (!config || !site) return null
+
+  const toneMappingOff = site.toneMapping === 'none'
+  const overridden = config.exposure != null
+
+  return (
+    <div className="p3d-ed-viewer">
+      <h4>Viewer brightness</h4>
+      <div className="p3d-ed-viewer-row">
+        <label style={toneMappingOff ? { opacity: 0.5, cursor: 'default' } : undefined}>
+          <input
+            type="checkbox"
+            checked={overridden}
+            disabled={toneMappingOff}
+            onChange={(e) => apply({ ...config, exposure: e.target.checked ? site.exposure : null })}
+          />
+          Set a brightness just for this product
+        </label>
+        <div className="p3d-ed-viewer-slider" style={overridden ? undefined : { opacity: 0.5 }}>
+          <input
+            type="range"
+            min={0.1} max={3} step={0.05}
+            value={config.exposure ?? site.exposure}
+            disabled={!overridden || toneMappingOff}
+            aria-label="Brightness for this product"
+            onChange={(e) => apply({ ...config, exposure: Number(e.target.value) })}
+          />
+          <span className="p3d-ed-viewer-val">{(config.exposure ?? site.exposure).toFixed(2)}</span>
+        </div>
+      </div>
+      <p className="p3d-ed-help">
+        {toneMappingOff
+          ? 'Brightness needs a colour handling other than None - set one under Shop settings, 3D Viewer tab.'
+          : overridden
+            ? 'This product uses its own brightness. Untick to go back to the site setting.'
+            : `Currently using the site setting (${site.exposure.toFixed(2)}), from Shop settings, 3D Viewer tab.`}
+      </p>
+      {error && <p className="p3d-ed-err">{error}</p>}
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { requireShopUser } from '@/modules/shop/lib/access'
 import { getAdminModels } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { getP3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import { FabricConfigSchema, getFabricConfig, saveFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
+import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
 import { listColourOptions, listSizeAttributes } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
 // The fabric configurator's admin data and save. `id` is always the PARENT product.
@@ -24,13 +25,18 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (gate.error) return gate.error
 
   const { id } = await params
-  const [config, options, attributes, models, settings] = await Promise.all([
+  const [config, options, attributes, models, siteSettings, productSettings] = await Promise.all([
     getFabricConfig(id),
     listColourOptions(id),
     listSizeAttributes(),
     getAdminModels(id),
     getP3dConfig(),
+    getP3dProductConfig(id),
   ])
+  // The preview should show what the shopper will see, so the product's own
+  // overrides (today: brightness) are resolved into the settings here, exactly
+  // as the gallery provider does for the storefront.
+  const settings = applyProductOverrides(siteSettings, productSettings)
   return NextResponse.json({ config, options, attributes, models, settings })
 }
 

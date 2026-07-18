@@ -1,5 +1,6 @@
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
+import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
 import { getP3dConfigCached } from '@/modules/product-3d-views-for-shop/lib/config'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { Gallery3dThumbs, Gallery3dStage } from '@/modules/product-3d-views-for-shop/components/public/Gallery3d'
@@ -28,7 +29,14 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
     if (models.length === 0) return null
     // Read only once we know there is a model to draw, and the settings are cached,
     // so a product page with no model never touches either table at all.
-    const [settings, fabricConfig] = await Promise.all([getP3dConfigCached(), getFabricConfig(productId)])
+    const [siteSettings, productSettings, fabricConfig] = await Promise.all([
+      getP3dConfigCached(),
+      getP3dProductConfig(productId),
+      getFabricConfig(productId),
+    ])
+    // The product's own overrides (today: brightness) laid over the sitewide
+    // settings, resolved here once so nothing downstream knows they exist.
+    const settings = applyProductOverrides(siteSettings, productSettings)
     // The configurator only lights up for a config that actually defines fabric
     // parts to paint; an empty or half-finished row is treated as "not configured"
     // and the gallery renders exactly as it did before, one thumbnail per model file
