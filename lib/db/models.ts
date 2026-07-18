@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { deleteMedia } from '@/lib/media/upload'
 import type { MediaProviderType } from '@prisma/client'
-import type { P3dAdminModel, P3dModel, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dAdminModel, P3dModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
 // Queries for p3d_models. Raw SQL throughout: module tables are created by this
@@ -103,14 +103,59 @@ export async function getVariationLabels(productId: string): Promise<Map<string,
 }
 
 /**
+ * Which option values each variation is made of, as { child product id -> value
+ * ids }. The editor's preview picker turns a set of dropdown choices into a
+ * variation with this; the labels above are for reading, these are for matching.
+ */
+export async function getVariationValueIds(productId: string): Promise<Map<string, string[]>> {
+  if (!(await hasVariationsTables())) return new Map()
+  const rows = await prisma.$queryRaw<{ productId: string; valueId: string }[]>`
+    SELECT v."child_product_id" AS "productId", vv."option_value_id" AS "valueId"
+    FROM "svr_variants" v
+    JOIN "svr_variant_values" vv ON vv."variant_id" = v."id"
+    WHERE v."product_id" = ${productId}
+  `
+  const byChild = new Map<string, string[]>()
+  for (const row of rows) {
+    const list = byChild.get(row.productId) ?? []
+    list.push(row.valueId)
+    byChild.set(row.productId, list)
+  }
+  return byChild
+}
+
+/**
+ * The product's variation options and their values, in the order the admin set
+ * them, for the preview picker's dropdowns. Empty when shop-variations is not
+ * installed or the product has no options.
+ */
+export async function getProductOptions(productId: string): Promise<P3dOption[]> {
+  if (!(await hasVariationsTables())) return []
+  const rows = await prisma.$queryRaw<{ optionId: string; name: string; valueId: string; label: string }[]>`
+    SELECT o."id" AS "optionId", o."name", ov."id" AS "valueId", ov."label"
+    FROM "svr_options" o
+    JOIN "svr_option_values" ov ON ov."option_id" = o."id"
+    WHERE o."product_id" = ${productId}
+    ORDER BY o."position" ASC, ov."position" ASC
+  `
+  const byId = new Map<string, P3dOption>()
+  for (const row of rows) {
+    const existing = byId.get(row.optionId) ?? { id: row.optionId, name: row.name, values: [] }
+    existing.values.push({ id: row.valueId, label: row.label })
+    byId.set(row.optionId, existing)
+  }
+  return [...byId.values()]
+}
+
+/**
  * Everywhere a model can be attached for this product: the product itself, then
  * each of its variations. The parent is always first and always present.
  */
 export async function getTargets(productId: string): Promise<P3dTarget[]> {
-  const labels = await getVariationLabels(productId)
+  const [labels, valueIds] = await Promise.all([getVariationLabels(productId), getVariationValueIds(productId)])
   return [
-    { productId, variationLabel: null },
-    ...[...labels].map(([id, label]) => ({ productId: id, variationLabel: label })),
+    { productId, variationLabel: null, valueIds: [] },
+    ...[...labels].map(([id, label]) => ({ productId: id, variationLabel: label, valueIds: valueIds.get(id) ?? [] })),
   ]
 }
 

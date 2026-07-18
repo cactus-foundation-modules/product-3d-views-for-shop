@@ -105,4 +105,18 @@ export type P3dTarget = {
   productId: string
   // Null for the parent product itself.
   variationLabel: string | null
+  // The option values that make this variation up ("Large", "Red"), as
+  // svr_option_values ids. Empty for the parent, and for a variant that has no
+  // option values of its own. The editor's preview picker matches a dropdown
+  // selection against these to find which variation to show.
+  valueIds: string[]
+}
+
+// One of the product's variation options, with its values, for the editor's
+// preview picker. The same shape shop-variations shows on the Variations tab,
+// trimmed to what a dropdown needs.
+export type P3dOption = {
+  id: string
+  name: string
+  values: { id: string; label: string }[]
 }

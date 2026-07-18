@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { P3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
-import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dAdminModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
@@ -44,6 +44,11 @@ const css = `
 .p3d-ed-viewer-slider input[type=range]{flex:1}
 .p3d-ed-viewer-val{font-size:.8125rem;color:var(--color-text-muted);
   font-variant-numeric:tabular-nums;min-width:2.5rem;text-align:right}
+.p3d-ed-pick{display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap}
+.p3d-ed-pick-field{display:grid;gap:.25rem}
+.p3d-ed-pick-label{font-size:.75rem;font-weight:600;color:var(--color-text-secondary)}
+.p3d-ed-pick-select{padding:.375rem .5rem;border:1px solid var(--color-border);border-radius:6px;
+  background:var(--color-bg);color:var(--color-text);font-size:.8125rem;font-family:inherit;min-width:150px}
 .p3d-ed-preview{height:320px;border:1px solid var(--color-border);border-radius:8px;
   overflow:hidden;position:relative;background:var(--color-bg-subtle)}
 .p3d-stage{width:100%;height:100%;position:relative;background:var(--color-bg-subtle)}
@@ -71,6 +76,8 @@ export function Product3dEditor({ productId }: { productId: string }) {
   // below wants the parent's own, while the viewer settings want to know whether
   // there is anything at all to light and need one model to preview it on.
   const [treeModels, setTreeModels] = useState<P3dAdminModel[]>([])
+  const [targets, setTargets] = useState<P3dTarget[]>([])
+  const [options, setOptions] = useState<P3dOption[]>([])
   const [hasVariations, setHasVariations] = useState(false)
   const [loading, setLoading] = useState(true)
   const [picking, setPicking] = useState(false)
@@ -82,16 +89,19 @@ export function Product3dEditor({ productId }: { productId: string }) {
   // setState here lands in a callback. Same shape as shop's own MediaPickerModal.
   // Returns its promise so an upload can wait for the list it just changed.
   //
-  // The route also returns the target list the Variations tab needs, dropped
-  // here: this tab only ever shows and adds the whole product's own models, and
-  // `targets.length > 1` is kept only as the signal that the product has
-  // variations, for the fabric panel below.
+  // The route also returns the target list and the product's variation options.
+  // This tab only ever shows and adds the whole product's own models, so neither
+  // steers the list; they feed the preview picker below, which turns a set of
+  // option choices into the variation whose model should be on the stage, and
+  // `targets.length > 1` doubles as the signal that the product has variations.
   const refresh = useCallback((): Promise<void> => {
     return fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/models`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { models: P3dAdminModel[]; targets: { productId: string }[] } | null) => {
+      .then((data: { models: P3dAdminModel[]; targets: P3dTarget[]; options: P3dOption[] } | null) => {
         if (data) {
           setTreeModels(data.models)
+          setTargets(data.targets)
+          setOptions(data.options ?? [])
           setHasVariations(data.targets.length > 1)
         }
         setLoading(false)
@@ -117,12 +127,10 @@ export function Product3dEditor({ productId }: { productId: string }) {
   // is the Variations tab's to manage.
   const models = useMemo(() => treeModels.filter((m) => m.productId === productId), [treeModels, productId])
 
-  // What the brightness preview shows. The product's own model where there is
-  // one, else the first variation's: the brightness is a property of the light,
-  // not the model, so a product whose models all hang off its variations still
-  // has something honest to judge it on. Removing the previewed model moves the
-  // preview on to the next, because treeModels is what it is drawn from.
-  const previewModel = models[0] ?? treeModels[0] ?? null
+  // Whether there is anything at all to light. What the preview actually shows is
+  // the panel's own business - it starts on the product's own model where there is
+  // one, else the first variation's, and follows the option dropdowns from there.
+  const hasAnyModel = models.length > 0 || treeModels.length > 0
 
   if (loading) return <p className="p3d-ed-help" style={{ padding: '1rem' }}>Loading…</p>
 
@@ -186,7 +194,14 @@ export function Product3dEditor({ productId }: { productId: string }) {
         {/* Per-product viewer overrides. Only shown once there is a model
             somewhere on the product for them to act on - the whole tree counts,
             because a variation's model is lit by the parent's override too. */}
-        {previewModel && <ViewerSettingsPanel productId={productId} previewModel={previewModel} />}
+        {hasAnyModel && (
+          <ViewerSettingsPanel
+            productId={productId}
+            treeModels={treeModels}
+            targets={targets}
+            options={options}
+          />
+        )}
 
         {/* The fabric configurator, for a product with variations. Hides itself
             when the size attributes it needs are not installed, so a plain
@@ -205,10 +220,28 @@ export function Product3dEditor({ productId }: { productId: string }) {
 // without a tone curve) and can rest the slider on what "the site setting"
 // currently is - and, once the override is on, to light the preview below the
 // slider exactly as the storefront will.
-function ViewerSettingsPanel({ productId, previewModel }: { productId: string; previewModel: P3dAdminModel }) {
+//
+// Which model the preview shows is the admin's to choose where the product has
+// variations: one dropdown per option, exactly the choices a shopper makes, so a
+// brightness set on a product whose models differ per colour can be judged on the
+// one that matters rather than on whichever happened to be first.
+function ViewerSettingsPanel({
+  productId,
+  treeModels,
+  targets,
+  options,
+}: {
+  productId: string
+  treeModels: P3dAdminModel[]
+  targets: P3dTarget[]
+  options: P3dOption[]
+}) {
   const [config, setConfig] = useState<P3dProductConfig | null>(null)
   const [site, setSite] = useState<P3dConfig | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // One chosen value per option id. Empty string means "not chosen", which reads
+  // as the product's own model rather than as an error.
+  const [choice, setChoice] = useState<Record<string, string>>({})
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -246,6 +279,56 @@ function ViewerSettingsPanel({ productId, previewModel }: { productId: string; p
 
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current) }, [])
 
+  // The product's own models first: they are what a shopper sees before choosing
+  // anything, so they are what the preview rests on until a combination is picked.
+  const ownModels = useMemo(() => treeModels.filter((m) => m.productId === productId), [treeModels, productId])
+  const fallbackModel = ownModels[0] ?? treeModels[0] ?? null
+
+  // Which option each value belongs to, so a variation's stored value ids can be
+  // laid back out as one choice per dropdown.
+  const optionOfValue = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const option of options) for (const value of option.values) map.set(value.id, option.id)
+    return map
+  }, [options])
+
+  // The dropdowns start on whatever the preview already shows, so opening the tab
+  // and then changing one option is a one-click move rather than a re-pick of the
+  // lot. Empty for the parent's own model, which belongs to no combination.
+  const defaultChoice = useMemo(() => {
+    const target = targets.find((t) => t.productId === fallbackModel?.productId)
+    const seed: Record<string, string> = {}
+    for (const valueId of target?.valueIds ?? []) {
+      const optionId = optionOfValue.get(valueId)
+      if (optionId) seed[optionId] = valueId
+    }
+    return seed
+  }, [targets, fallbackModel?.productId, optionOfValue])
+
+  const selection = useMemo(() => ({ ...defaultChoice, ...choice }), [defaultChoice, choice])
+
+  // The variation the chosen combination names, and the model hanging off it. A
+  // part-filled combination matches nothing on purpose: half a choice is not a
+  // variation, and guessing which of the matching ones was meant would show the
+  // admin a model they did not ask for.
+  const chosenTarget = useMemo(() => {
+    if (options.length === 0) return null
+    const wanted = options.map((o) => selection[o.id] ?? '')
+    if (wanted.some((v) => !v)) return null
+    return targets.find((t) => t.valueIds.length > 0 && wanted.every((v) => t.valueIds.includes(v))) ?? null
+  }, [options, selection, targets])
+
+  const chosenModel = useMemo(
+    () => (chosenTarget ? treeModels.find((m) => m.productId === chosenTarget.productId) ?? null : null),
+    [chosenTarget, treeModels],
+  )
+
+  // A chosen combination with no model of its own falls back to the product's own
+  // model rather than to an empty stage: the brightness is a property of the
+  // light, and something lit is worth more than nothing.
+  const previewModel = chosenModel ?? ownModels[0] ?? fallbackModel
+  const showPicker = options.length > 0 && targets.length > 1
+
   // The site's own lighting with this product's brightness dropped over the top,
   // which is precisely what a shopper on this product's page would get. Memoised
   // so the viewer is handed the same object between renders: a fresh one every
@@ -258,17 +341,20 @@ function ViewerSettingsPanel({ productId, previewModel }: { productId: string; p
   // Stable across a drag: it keys the preview only by which model is on the
   // stage, so changing the brightness never remounts the viewer.
   const previewItem = useMemo(
-    () => ({
-      key: previewModel.id,
-      productId: previewModel.productId,
-      url: previewModel.url,
-      format: previewModel.format,
-      label: `${formatLabel(previewModel.format)} preview`,
-    }),
-    [previewModel.id, previewModel.productId, previewModel.url, previewModel.format],
+    () =>
+      previewModel
+        ? {
+            key: previewModel.id,
+            productId: previewModel.productId,
+            url: previewModel.url,
+            format: previewModel.format,
+            label: `${formatLabel(previewModel.format)} preview`,
+          }
+        : null,
+    [previewModel],
   )
 
-  if (!config || !site || !previewSettings) return null
+  if (!config || !site || !previewSettings || !previewItem || !previewModel) return null
 
   const toneMappingOff = site.toneMapping === 'none'
   const overridden = config.exposure != null
@@ -311,6 +397,26 @@ function ViewerSettingsPanel({ productId, previewModel }: { productId: string; p
           are not a fair price for a tab the admin opened to add a file. */}
       {overridden && !toneMappingOff && (
         <>
+          {showPicker && (
+            <div className="p3d-ed-pick">
+              {options.map((option) => (
+                <div key={option.id} className="p3d-ed-pick-field">
+                  <label className="p3d-ed-pick-label" htmlFor={`p3d-pick-${option.id}`}>{option.name}</label>
+                  <select
+                    id={`p3d-pick-${option.id}`}
+                    className="p3d-ed-pick-select"
+                    value={selection[option.id] ?? ''}
+                    onChange={(e) => setChoice({ ...selection, [option.id]: e.target.value })}
+                  >
+                    <option value="">Any</option>
+                    {option.values.map((value) => (
+                      <option key={value.id} value={value.id}>{value.label}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="p3d-ed-preview">
             <Viewer3d item={previewItem} settings={previewSettings} />
           </div>
@@ -318,6 +424,11 @@ function ViewerSettingsPanel({ productId, previewModel }: { productId: string; p
             {previewModel.variationLabel
               ? `Lit as a shopper would see it, on this product’s “${previewModel.variationLabel}” model. Drag to turn it.`
               : 'Lit as a shopper would see it, using the rest of your sitewide 3D settings. Drag to turn it.'}
+            {showPicker && !chosenModel && (
+              chosenTarget
+                ? <> That combination has no 3D model of its own yet, so this is the product&rsquo;s.</>
+                : <> Pick a full set of options above to see a particular variation&rsquo;s model.</>
+            )}
           </p>
         </>
       )}

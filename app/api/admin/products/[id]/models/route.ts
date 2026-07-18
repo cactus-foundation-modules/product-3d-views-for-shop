@@ -5,7 +5,7 @@ import { resolveFolderPath } from '@/lib/media/organise'
 import { saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
 import { verifyUploadToken } from '@/lib/media/upload-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
-import { createModel, getAdminModels, getTargets, isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
+import { createModel, getAdminModels, getProductOptions, getTargets, isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { resolve3dFolderId } from '@/modules/product-3d-views-for-shop/lib/media-folder'
 import {
   P3D_MAX_UPLOAD_BYTES,
@@ -32,8 +32,11 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (gate.error) return gate.error
 
   const { id } = await params
-  const [models, targets] = await Promise.all([getAdminModels(id), getTargets(id)])
-  return NextResponse.json({ models, targets })
+  // Options ride along with the targets: the editor's preview picker needs both
+  // halves - what a shopper can choose, and which variation each choice lands on
+  // - and a second round-trip for the smaller half would only be slower.
+  const [models, targets, options] = await Promise.all([getAdminModels(id), getTargets(id), getProductOptions(id)])
+  return NextResponse.json({ models, targets, options })
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
