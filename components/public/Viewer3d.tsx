@@ -11,7 +11,7 @@
 // taken it up it has done its job.
 
 import { useEffect, useRef, useState } from 'react'
-import type { Object3D, Texture } from 'three'
+import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
@@ -63,6 +63,10 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
   // hoisting the whole WebGL setup into React state.
   const resetRef = useRef<(() => void) | null>(null)
 
+  // The live renderer, kept only so the brightness effect below can reach it.
+  // Null before the first build finishes and after a dispose.
+  const rendererRef = useRef<ThreeRenderer | null>(null)
+
   // A stable signature of the paints, so the repaint effect fires on a colour change
   // (same model, new textures) but not on every parent render handing a fresh object.
   const fabricSignature = JSON.stringify(fabric?.slots ?? [])
@@ -113,6 +117,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         }[settings.toneMapping]
         renderer.toneMapping = toneMap
         renderer.toneMappingExposure = settings.exposure
+        rendererRef.current = renderer
 
         const scene = new Scene()
         const keyLight = await addLights(scene, renderer, settings)
@@ -362,6 +367,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           modelRef.current = null
           builtUrlRef.current = null
           resetRef.current = null
+          rendererRef.current = null
           disposeModel(model)
           disposeEnvironment(renderer)
           // Frees the WebGL context itself. Without it, a shopper flicking between
@@ -377,6 +383,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         disposeShadow?.()
         for (const tex of appliedRef.current.values()) tex.dispose()
         appliedRef.current.clear()
+        rendererRef.current = null
         disposeModel(model)
         disposeEnvironment(renderer)
         renderer.dispose()
@@ -396,6 +403,19 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
     // and a model change (headrest) alters item.url, which does re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item.url, item.format])
+
+  // Brightness, pushed straight at the live renderer rather than rebuilt.
+  //
+  // The build effect above deliberately ignores `settings`, which is right for
+  // the storefront - the settings are fixed for the life of the page there. The
+  // admin's brightness preview is the one place they do move, and a slider drag
+  // that tore down the WebGL context and re-downloaded the model on every step
+  // would be no preview at all. Exposure is a single renderer property and the
+  // animation loop redraws every frame, so setting it here shows up on the next
+  // one. Inert wherever the value never changes.
+  useEffect(() => {
+    if (rendererRef.current) rendererRef.current.toneMappingExposure = settings.exposure
+  }, [settings.exposure])
 
   // Repaint the fabric slots in place when the colours change but the model does
   // not - the whole point of the configurator: a seat-colour change must not tear

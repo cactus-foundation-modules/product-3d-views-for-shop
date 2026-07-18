@@ -10,13 +10,16 @@ import {
 // The product editor's per-product viewer overrides (today: brightness).
 // `id` is always the PARENT product, matching this module's other admin routes.
 //
-// GET also returns the two sitewide values the panel needs to make sense of
-// itself: the colour handling (brightness is inert while it is 'none', and the
-// panel greys out accordingly) and the sitewide brightness (what "use the site
-// setting" currently means, shown as the slider's resting value). They ride
-// along here rather than being fetched from the settings route because that one
-// is gated on 'shop.manage', which a 'shop.products' admin editing a product
-// need not have - the same reasoning as the fabric route.
+// GET also returns the whole sitewide config. The panel needs the colour
+// handling (brightness is inert while it is 'none', and the panel greys out
+// accordingly) and the sitewide brightness (what "use the site setting"
+// currently means, shown as the slider's resting value) - and the rest of it to
+// light its live preview the way the storefront will, since a preview lit by
+// anything other than the site's own lighting would be a preview of nothing.
+// They ride along here rather than being fetched from the settings route
+// because that one is gated on 'shop.manage', which a 'shop.products' admin
+// editing a product need not have - the same reasoning as the fabric route,
+// which already hands the same config to the same admin.
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const gate = await requireShopUser('shop.products')
@@ -24,10 +27,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
   const { id } = await params
   const [config, site] = await Promise.all([getP3dProductConfig(id), getP3dConfig()])
-  return NextResponse.json({
-    config,
-    site: { toneMapping: site.toneMapping, exposure: site.exposure },
-  })
+  return NextResponse.json({ config, site })
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
