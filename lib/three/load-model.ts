@@ -390,15 +390,28 @@ export async function applyFabricPaint(
     // the model's UVs. Copy the slot's own existing map where there is one (the
     // safest match against an odd export), and default to the glTF convention where
     // there is not.
-    if (existing) {
-      tex.flipY = existing.flipY
-      tex.channel = existing.channel
-      tex.center.copy(existing.center)
-      tex.rotation = existing.rotation
-      tex.offset.copy(existing.offset)
-    } else {
-      tex.flipY = false
-    }
+    //
+    // "Existing" may itself be a previous paint (a repaint-in-place after an option
+    // change) whose rotation already includes an earlier turn - reading the live
+    // values off it would compound that turn every repaint (90 -> 180 -> 270). So
+    // the FIRST paint records the file's own transform under userData, and every
+    // later paint composes against that record, never the previous paint's output.
+    // Plain JSON shapes, because three deep-copies userData via JSON on clone.
+    const base = existing?.userData?.p3dBaseTransform ?? (existing
+      ? {
+          flipY: existing.flipY,
+          channel: existing.channel,
+          rotation: existing.rotation,
+          center: [existing.center.x, existing.center.y],
+          offset: [existing.offset.x, existing.offset.y],
+        }
+      : { flipY: false, channel: 0, rotation: 0, center: [0, 0], offset: [0, 0] })
+    tex.flipY = base.flipY
+    tex.channel = base.channel
+    tex.rotation = base.rotation
+    tex.center.set(base.center[0], base.center[1])
+    tex.offset.set(base.offset[0], base.offset[1])
+    tex.userData.p3dBaseTransform = base
     tex.repeat.set(paint.repeat, paint.repeat)
     // The admin's turn, on top of whatever the model's own map already carried, and
     // about the middle of the tile rather than its corner - a corner pivot slides the
@@ -406,7 +419,7 @@ export async function applyFabricPaint(
     // when there is a turn to make, so a part left at 0 keeps the file's own centre.
     if (rotationRad !== 0) {
       tex.center.set(0.5, 0.5)
-      tex.rotation = (existing?.rotation ?? 0) + rotationRad
+      tex.rotation = base.rotation + rotationRad
     }
     return tex
   }
