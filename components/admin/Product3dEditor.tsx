@@ -134,8 +134,8 @@ export function Product3dEditor({ productId }: { productId: string }) {
           A 3D model shows in the product gallery as an extra thumbnail with a <strong>3D</strong> badge, turning gently
           on its own. Shoppers who click it get the model in place of the main photograph, and can turn, pan and zoom it.
           {' '}<strong>GLB is the format to use</strong> if you have the choice - it packs the shape, colours and textures
-          into one file. glTF, OBJ, FBX and 3DS also work, though OBJ carries no colours of its own and FBX files tend to
-          be large. Up to {P3D_MAX_UPLOAD_MB} MB each.
+          into one file. glTF, OBJ, FBX and 3DS also work, though an OBJ carries no colours of its own and so shows in
+          plain grey, and FBX files tend to be large. Up to {P3D_MAX_UPLOAD_MB} MB each.
           {hasVariations && (
             <> A variation gets its own model from the <strong>Variations</strong> tab, next to its picture - this is
             for a model that shows on the whole product.</>

@@ -39,6 +39,12 @@ const DEFAULT_LIGHTING: P3dLighting = {
 const cache = new Map<string, Promise<Object3D>>()
 
 async function parse(url: string, format: P3dFormat): Promise<Object3D> {
+  const model = await parseRaw(url, format)
+  await normaliseMaterials(model, format)
+  return model
+}
+
+async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
   switch (format) {
     case 'glb':
     case 'gltf': {
@@ -49,9 +55,10 @@ async function parse(url: string, format: P3dFormat): Promise<Object3D> {
     case 'obj': {
       const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js')
       // No .mtl is fetched: the admin uploaded one file, and an OBJ's materials
-      // live in a sibling that was never uploaded with it. The loader's default
-      // white material is what an unaccompanied OBJ honestly looks like, and the
-      // editor's help text says so rather than letting it surprise anyone.
+      // live in a sibling that was never uploaded with it. What the file DOES
+      // carry is its `usemtl` names, which the loader keeps on the materials it
+      // invents - so the fabric configurator's slots still work on an OBJ even
+      // though nothing describes what those slots should look like.
       return await new OBJLoader().loadAsync(url)
     }
     case 'fbx': {
@@ -63,6 +70,138 @@ async function parse(url: string, format: P3dFormat): Promise<Object3D> {
       return await new TDSLoader().loadAsync(url)
     }
   }
+}
+
+// The colour and roughness an OBJ's materials are given. An OBJ arrives here with
+// no material information at all (see parseRaw), so these are OUR choice, not the
+// file's: a light neutral grey with a soft sheen, the "unpainted model" look, and
+// deliberately off pure white. Pure white is the one albedo that cannot help but
+// clip - it reflects every photon the rig sends it - so an OBJ left at the
+// loader's default was permanently at the top of the exposure range while every
+// glTF beside it sat in the middle. Roughness is mid-matte rather than glossy,
+// because a specular hotspot on a shape with no texture reads as a rendering
+// fault rather than a finish.
+const UNDESCRIBED_COLOUR = 0xcccccc
+const UNDESCRIBED_ROUGHNESS = 0.6
+
+/**
+ * Put every material in a model onto the same lighting model: MeshStandardMaterial.
+ *
+ * Only glTF hands back PBR materials. OBJ, FBX and 3DS all arrive as
+ * MeshPhongMaterial - a pre-PBR model that predates the maths the rest of this
+ * file assumes - and the two respond to the same scene in wildly different ways:
+ *
+ *   - Phong does not conserve energy. Its diffuse term is albedo x light, with no
+ *     1/pi, so the rig in addLights (ambient + key + fill) lands roughly three
+ *     times as much light on a Phong surface as on a Standard one of the same
+ *     colour. That alone is most of the "some models are much brighter" report.
+ *   - Phong is not lit by `scene.environment` on the same terms, so the site
+ *     owner's environment slider moved the glTF models and barely touched the
+ *     rest. Two files, one set of sliders, two different meanings.
+ *   - An OBJ's invented material is pure white on top of that, which clips.
+ *
+ * Converting at parse time - once per file, on the cached master, before any
+ * clone is handed out - means the lighting settings, the per-product brightness
+ * override and the tone mapping curve all mean exactly one thing regardless of
+ * what the admin uploaded.
+ *
+ * The material NAME is carried across untouched, because it is the contract the
+ * fabric configurator matches on (see applyFabricPaint). Materials that are
+ * already Standard or Physical are left alone, as are the Basic materials a glTF
+ * uses to say "do not light this at all" (KHR_materials_unlit) and the Line and
+ * Points materials OBJLoader hands back for non-mesh geometry - converting any of
+ * those would override an intent rather than translate one.
+ *
+ * Exported for its test rather than for callers: this is a silent visual change,
+ * the kind nothing else in the suite would notice going wrong, and the material
+ * NAME surviving the swap is a contract a future edit here could break without
+ * anything failing until a shopper's fabric picker quietly stopped painting.
+ */
+export async function normaliseMaterials(root: Object3D, format: P3dFormat): Promise<void> {
+  const { Color, MeshStandardMaterial } = await import('three')
+
+  // One source material commonly backs many meshes - OBJLoader shares a single
+  // default across the whole file. Converting per mesh would multiply that into
+  // one material per mesh and, worse, break the sharing the clone step in
+  // loadModel relies on to stay cheap.
+  const converted = new Map<Material, Material>()
+
+  const convert = (source: Material): Material => {
+    const cached = converted.get(source)
+    if (cached) return cached
+
+    const src = source as Material & Record<string, unknown>
+    if (src.isMeshPhongMaterial !== true && src.isMeshLambertMaterial !== true) return source
+
+    const next = new MeshStandardMaterial()
+    next.name = source.name
+
+    // Shininess is Phong's specular exponent; Standard wants a roughness. This is
+    // the usual inversion between the two, and Lambert (no shininess at all) is
+    // fully diffuse by definition. Clamped off zero because a roughness of 0 is a
+    // mirror, which no Phong material ever meant to be.
+    const shininess = typeof src.shininess === 'number' ? src.shininess : null
+    next.roughness = shininess === null ? 1 : Math.min(1, Math.max(0.05, Math.sqrt(2 / (shininess + 2))))
+    // Never guessed from the source's specular colour. Metalness 1 removes the
+    // diffuse term entirely, so a wrong guess renders the part black rather than
+    // slightly off - the same failure the missing environment caused (see
+    // addLights). Nothing in a Phong material states "this is metal", so we do
+    // not claim it does.
+    next.metalness = 0
+
+    if (src.color instanceof Color) next.color.copy(src.color)
+    if (src.emissive instanceof Color) next.emissive.copy(src.emissive)
+    if (typeof src.emissiveIntensity === 'number') next.emissiveIntensity = src.emissiveIntensity
+
+    // An OBJ's material describes nothing, so the file's values here are the
+    // loader's defaults rather than anyone's intent - replaced with ours. A FBX or
+    // 3DS material was authored, so its colour and sheen are carried as they are.
+    if (format === 'obj') {
+      next.color.setHex(UNDESCRIBED_COLOUR)
+      next.roughness = UNDESCRIBED_ROUGHNESS
+    }
+
+    // Texture slots that mean the same thing in both models. specularMap has no
+    // Standard equivalent (its nearest, an inverted roughnessMap, would need the
+    // texture rebuilt rather than referenced) and is dropped; envMap is dropped
+    // because scene.environment supplies one for every model here.
+    for (const slot of ['map', 'alphaMap', 'aoMap', 'bumpMap', 'displacementMap', 'emissiveMap', 'lightMap', 'normalMap'] as const) {
+      const texture = src[slot]
+      if (texture) Object.assign(next, { [slot]: texture })
+    }
+    for (const scalar of ['aoMapIntensity', 'bumpScale', 'displacementScale', 'displacementBias', 'lightMapIntensity', 'normalMapType'] as const) {
+      if (src[scalar] !== undefined) Object.assign(next, { [scalar]: src[scalar] })
+    }
+    if (src.normalScale) next.normalScale.copy(src.normalScale as { x: number; y: number })
+
+    // Base-material state that has nothing to do with the lighting model and must
+    // survive the swap. flatShading and vertexColors matter most: OBJLoader sets
+    // both from the file itself, so dropping them would smooth a faceted model and
+    // grey out a vertex-coloured one.
+    for (const flag of [
+      'alphaTest', 'alphaToCoverage', 'blending', 'clipIntersection', 'clipShadows', 'colorWrite',
+      'depthTest', 'depthWrite', 'dithering', 'flatShading', 'fog', 'opacity', 'premultipliedAlpha',
+      'shadowSide', 'side', 'toneMapped', 'transparent', 'vertexColors', 'visible', 'wireframe',
+    ] as const) {
+      if (src[flag] !== undefined) Object.assign(next, { [flag]: src[flag] })
+    }
+    next.userData = source.userData
+
+    // The discarded material never reached a renderer, so this frees nothing on
+    // the GPU; it is here so anything listening for the material's disposal hears
+    // about it rather than holding a reference to something now unreachable. Its
+    // textures are deliberately NOT disposed - they were just handed to `next`.
+    source.dispose()
+
+    converted.set(source, next)
+    return next
+  }
+
+  root.traverse((child) => {
+    const mesh = child as Object3D & { material?: Material | Material[] }
+    if (!mesh.material) return
+    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(convert) : convert(mesh.material)
+  })
 }
 
 export async function loadModel(url: string, format: P3dFormat): Promise<Object3D> {
