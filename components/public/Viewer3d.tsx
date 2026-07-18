@@ -164,10 +164,23 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // The site owner's choice, but a shopper who asked their system for less
         // movement still overrides it - reduced motion is theirs to set, not the
         // owner's to switch off.
-        controls.autoRotate = settings.autoRotate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+        const wantsMotion =
+          settings.autoRotate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+        // Two ways to satisfy "auto-rotate", picked by spinModel: orbit the camera
+        // around a still model (the historic default, shadow holds its place), or
+        // spin the model itself under a fixed light so the shadow sweeps with it.
+        // Only one is ever live at a time.
+        controls.autoRotate = wantsMotion && !settings.spinModel
         controls.autoRotateSpeed = settings.autoRotateSpeed
+        // Per-frame turn for the model-spin path, matched to OrbitControls' own
+        // auto-rotation step so both modes read at the same speed for a given
+        // autoRotateSpeed.
+        const spinStep = ((2 * Math.PI) / 60 / 60) * settings.autoRotateSpeed
+        let spinModel = wantsMotion && settings.spinModel
         controls.addEventListener('start', () => {
+          // First touch stops the idle motion for good, whichever mode it was.
           controls.autoRotate = false
+          spinModel = false
           setTouched(true)
         })
 
@@ -187,6 +200,11 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
 
         const loop = (): void => {
           frame = requestAnimationFrame(loop)
+          // Turn the model, not the camera: the light and shadow-catcher plane are
+          // scene-level, so the model spinning under them is what makes the shadow
+          // move. The shadow camera's reach is sized off the model's largest
+          // dimension, so a full turn stays within it.
+          if (spinModel) pivot.rotation.y += spinStep
           controls.update()
           renderer.render(scene, camera)
         }

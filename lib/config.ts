@@ -74,6 +74,14 @@ export const P3dConfigSchema = z
     // asked for less movement, not an override of the ones who have.
     autoRotate: z.boolean().default(true),
     autoRotateSpeed: z.number().min(0.1).max(10).default(1.2),
+    // Off keeps the historic behaviour: auto-rotate orbits the camera around a
+    // still model, so the key light and the shadow it casts hold their place
+    // while the view goes round - a person walking round a fixed object. On spins
+    // the model itself under a fixed light instead, the way the thumbnails already
+    // turn (see thumb-stage), so the shadow sweeps with it - a turntable. Only
+    // affects the idle spin; a shopper's drag still orbits the camera either way,
+    // and auto-rotate stops for good on first touch regardless.
+    spinModel: z.boolean().default(false),
     enablePan: z.boolean().default(true),
     // The bounds that stop a shopper zooming through the model or pushing it away
     // to a dot they then have to hunt for. Both are easy to do by accident on a
