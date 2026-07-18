@@ -3,7 +3,7 @@ import { composeFabricBundle, parseSwatchCm, tileRepeat } from '@/modules/produc
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, attributeColourId, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 
 // Ids kept short and named so a failing assertion reads on its own.
 const OPT_SEAT_COLOUR = 'opt-seat-colour'
@@ -13,6 +13,8 @@ const VAL_TEAL = 'val-teal'
 const ATTR_SEAT_SIZE = 'attr-seat-size'
 const ATTR_BACK_SIZE = 'attr-back-size'
 const ATTR_HEIGHT = 'attr-height'
+// An attribute used as a COLOUR source rather than as a measurement.
+const ATTR_FINISH = 'attr-finish'
 const MODEL_WITH = 'model-with'
 const MODEL_NONE = 'model-none'
 
@@ -252,17 +254,78 @@ describe('composeFabricBundle', () => {
     expect(bundle?.slots[0]?.repeat).toBe(1)
   })
 
-  it('skips a slot whose colour has no usable texture url', () => {
+  it('skips a slot whose colour value carries nothing to paint with', () => {
     const bundle = composeFabricBundle(
       config(),
       MODEL_WITH_OBJ,
       100,
+      // Both chosen values have an empty swatch: no picture and no colour, so there
+      // is nothing to paint either part with.
       selected(
-        // A colour value with an empty swatch, and one with a non-http token.
         { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: '' },
-        { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: '#ff0000' },
+        { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: null },
       ),
       [],
+    )
+    expect(bundle?.slots).toEqual([])
+  })
+
+  it('paints a hex-swatch colour value flat, with nothing to tile', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, rotationDeg: 90 })] }),
+      MODEL_WITH_OBJ,
+      100,
+      // A plain colour option rather than a picture one: the shopper's choice is a
+      // hex, so the part is painted flat and its rotation is beside the point.
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: '#FF0000' }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Fabric seat', textureUrl: '', colour: '#ff0000', repeat: 1, rotationDeg: 0 },
+    ])
+  })
+
+  it('paints from an ATTRIBUTE value when the slot points at one', () => {
+    const bundle = composeFabricBundle(
+      config({
+        slots: [slot({ materialName: 'Fabric seat', colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '20cm' })],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      // Nothing selected on the variation options at all: the finish lives on an
+      // attribute set against this variation instead.
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_FINISH, label: 'Oak', swatch: CRAB_URL },
+      ],
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+    ])
+  })
+
+  it('leaves an attribute-painted part alone when this variation carries no value for it', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH) })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      // The height is set, the finish is not - so there is no swatch to paint with.
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+    )
+    expect(bundle?.slots).toEqual([])
+  })
+
+  it('does not read an attribute id as an option id, or the other way round', () => {
+    // The same raw id in both tables must not cross over: a slot pointing at the
+    // ATTRIBUTE must ignore an option value that happens to share its id.
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: attributeColourId(OPT_SEAT_COLOUR) })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
     )
     expect(bundle?.slots).toEqual([])
   })

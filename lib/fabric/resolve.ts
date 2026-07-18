@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
-import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_SIZE_ID, attributeColourId, parseHexColour, readColourSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -88,8 +88,13 @@ function isHttpUrl(value: string): boolean {
 
 // One selected option value on a variant child, as the composition needs it.
 export type SelectedOptionValue = { optionId: string; valueId: string; swatch: string | null }
-// One size attribute value assigned to a variant child.
-export type ChildSizeValue = { attributeId: string; label: string }
+// One attribute value assigned to a variant child. Carries both halves of what an
+// attribute value can say: its `label` (the real-world size or overall height, read
+// by parseSwatchCm) and its `swatch` (the picture that paints a material part).
+// Which of the two is used depends on where the config points at the attribute, not
+// on the value itself - an "Oak" finish attribute has no useful number in its label
+// and a "20x20cm" swatch-size attribute has no picture.
+export type ChildSizeValue = { attributeId: string; label: string; swatch?: string | null }
 
 /**
  * Compose the viewer bundle for a resolved model and a child's selections. Pure and
@@ -128,14 +133,29 @@ export function composeFabricBundle(
       // fetch, no size to read and nothing to tile, so the part is painted flat and
       // the whole scale derivation below is skipped. A colour that will not parse
       // leaves the part alone rather than painting it some guessed shade.
-      if (slot.colourOptionId === MANUAL_COLOUR_ID) {
+      const source = readColourSource(slot.colourOptionId)
+      if (source.kind === 'manual') {
         const colour = parseHexColour(slot.colourManual)
         if (!colour) return null
         return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
       }
-      const choice = selected.find((s) => s.optionId === slot.colourOptionId)
-      const textureUrl = choice?.swatch ?? ''
-      if (!isHttpUrl(textureUrl)) return null
+      // Either route ends in one swatch url: a variation option's selected value, or
+      // the value of an attribute set on this variation. Everything past this point
+      // (scale, rotation) is the same for both.
+      const swatch =
+        source.kind === 'attribute'
+          ? sizes.find((z) => z.attributeId === source.id)?.swatch ?? ''
+          : selected.find((s) => s.optionId === source.id)?.swatch ?? ''
+      // Both modules store one visual per value in the same column: a media url for
+      // a picture swatch, a hex colour for a plain colour one. A picture is a texture
+      // and tiles at true scale; a hex is a flat paint, with nothing to tile and no
+      // direction to turn, so it settles here exactly as a hand-typed colour does.
+      if (!isHttpUrl(swatch)) {
+        const colour = parseHexColour(swatch)
+        if (!colour) return null
+        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
+      }
+      const textureUrl = swatch
       // A hand-typed size is a fact about the SURFACE, not about the variation, so
       // it applies to every child alike - a laminate's repeat does not change with
       // the seat colour. Read by the same parser as an attribute label, so the two
@@ -210,13 +230,14 @@ export async function resolveFabricForChild(
     WHERE v."child_product_id" = ${childProductId}
   `
 
-  // The child's attribute values - both the per-slot swatch sizes and the model's
-  // overall height ride in here (all pat_attributes). Without product-attributes
+  // The child's attribute values - the per-slot swatch sizes, the model's overall
+  // height and any material picture set as an attribute rather than as a variation
+  // option all ride in here (all pat_attributes). Without product-attributes
   // there are none, so tiling stays uncalibrated (repeat 1) and only the colour is
   // applied, which composeFabricBundle handles.
   const sizes = (await hasAttributeTables())
-    ? await prisma.$queryRaw<{ attributeId: string; label: string }[]>`
-        SELECT a."id" AS "attributeId", av."label"
+    ? await prisma.$queryRaw<{ attributeId: string; label: string; swatch: string | null }[]>`
+        SELECT a."id" AS "attributeId", av."label", av."swatch"
         FROM "pat_product_values" pv
         JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
         JOIN "pat_attributes" a ON a."id" = av."attribute_id"
@@ -282,6 +303,38 @@ export async function listColourOptions(productId: string): Promise<FabricColour
     const existing = byId.get(row.optionId) ?? { id: row.optionId, name: row.name, values: [] }
     existing.values.push({ id: row.valueId, label: row.label, swatch: row.swatch })
     byId.set(row.optionId, existing)
+  }
+  return [...byId.values()]
+}
+
+/**
+ * The site's attributes that could paint a material, for the colour dropdowns
+ * alongside the product's variation options. Returned in the same shape as an
+ * option, with its id already prefixed (see ATTRIBUTE_COLOUR_PREFIX), so the panel
+ * and the preloader treat the two sources alike.
+ *
+ * Only attributes with at least one picture-swatch value are offered: an attribute
+ * of plain words - a size, a warranty, a material NAME with no picture behind it -
+ * has nothing to paint with, and listing it would only invite a slot that silently
+ * renders nothing. Site-wide rather than per-product, because attribute values are
+ * assigned to a variation rather than declared on the parent the way options are.
+ */
+export async function listColourAttributes(): Promise<FabricColourOption[]> {
+  if (!(await hasAttributeTables())) return []
+  const rows = await prisma.$queryRaw<
+    { attributeId: string; name: string; valueId: string; label: string; swatch: string | null }[]
+  >`
+    SELECT a."id" AS "attributeId", a."name", av."id" AS "valueId", av."label", av."swatch"
+    FROM "pat_attributes" a
+    JOIN "pat_attribute_values" av ON av."attribute_id" = a."id"
+    WHERE av."swatch" IS NOT NULL AND av."swatch" <> ''
+    ORDER BY a."name" ASC, av."position" ASC
+  `
+  const byId = new Map<string, FabricColourOption>()
+  for (const row of rows) {
+    const existing = byId.get(row.attributeId) ?? { id: attributeColourId(row.attributeId), name: row.name, values: [] }
+    existing.values.push({ id: row.valueId, label: row.label, swatch: row.swatch })
+    byId.set(row.attributeId, existing)
   }
   return [...byId.values()]
 }

@@ -4,14 +4,16 @@ import { getAdminModels } from '@/modules/product-3d-views-for-shop/lib/db/model
 import { getP3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import { FabricConfigSchema, getFabricConfig, saveFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
-import { listColourOptions, listSizeAttributes } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { listColourAttributes, listColourOptions, listSizeAttributes } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
 // The fabric configurator's admin data and save. `id` is always the PARENT product.
 //
 // GET returns everything the panel needs to build its dropdowns: the saved config,
-// the product's variation options + values (for the colour dropdowns), every size
-// attribute (for the size dropdowns), the product's attached models, and the viewer
-// settings for the panel's live preview. Material names are detected client-side
+// the product's variation options + values and the site's swatch-carrying attributes
+// (both offered as colour sources, since a range's finishes live in one or the
+// other depending on how the shop was set up), every size attribute (for the size
+// dropdowns), the product's attached models, and the viewer settings for the
+// panel's live preview. Material names are detected client-side
 // from the model itself, so the server never parses a GLB.
 //
 // The viewer settings ride along here rather than being fetched from the settings
@@ -25,9 +27,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (gate.error) return gate.error
 
   const { id } = await params
-  const [config, options, attributes, models, siteSettings, productSettings] = await Promise.all([
+  const [config, options, colourAttributes, attributes, models, siteSettings, productSettings] = await Promise.all([
     getFabricConfig(id),
     listColourOptions(id),
+    listColourAttributes(),
     listSizeAttributes(),
     getAdminModels(id),
     getP3dConfig(),
@@ -37,7 +40,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   // overrides (today: brightness) are resolved into the settings here, exactly
   // as the gallery provider does for the storefront.
   const settings = applyProductOverrides(siteSettings, productSettings)
-  return NextResponse.json({ config, options, attributes, models, settings })
+  return NextResponse.json({ config, options, colourAttributes, attributes, models, settings })
 }
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

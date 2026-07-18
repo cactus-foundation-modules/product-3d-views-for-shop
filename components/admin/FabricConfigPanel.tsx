@@ -124,7 +124,8 @@ const css = `
 export function FabricConfigPanel({ productId }: { productId: string }) {
   const [loading, setLoading] = useState(true)
   const [config, setConfig] = useState<FabricConfig>(EMPTY)
-  const [options, setOptions] = useState<FabricColourOption[]>([])
+  const [variationOptions, setVariationOptions] = useState<FabricColourOption[]>([])
+  const [colourAttributes, setColourAttributes] = useState<FabricColourOption[]>([])
   const [attributes, setAttributes] = useState<FabricSizeAttribute[]>([])
   const [models, setModels] = useState<P3dAdminModel[]>([])
   const [settings, setSettings] = useState<P3dConfig | null>(null)
@@ -142,7 +143,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     let cancelled = false
     fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/fabric`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { config: FabricConfig | null; options: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
+      .then((data: { config: FabricConfig | null; options: FabricColourOption[]; colourAttributes: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
         // The same GLB is attached once per variation, so the raw model list repeats
         // each file dozens of times (one p3d_models row per variation). A model height
@@ -165,7 +166,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         // Seed the densities from what was measured on the last save, so the panel
         // is usable before a re-detect and a save without one keeps them.
         setDensities(Object.fromEntries(saved.slots.map((s) => [s.materialName, s.texelDensity])))
-        setOptions(data.options)
+        setVariationOptions(data.options)
+        setColourAttributes(data.colourAttributes ?? [])
         setAttributes(data.attributes)
         setModels(data.models)
         setSettings(data.settings)
@@ -174,6 +176,16 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       .catch(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [productId])
+
+  // Both colour sources as one list, for everything that only needs to look a slot's
+  // stored id up: the preview, the name-guess when a part is added, the fallback when
+  // a product has no variation options of its own. The dropdown keeps them apart in
+  // two groups, because which one an admin is looking at matters when they pick.
+  // Attribute ids arrive prefixed from the server, so the two can never collide.
+  const colourSources = useMemo(
+    () => [...variationOptions, ...colourAttributes],
+    [variationOptions, colourAttributes],
+  )
 
   // One entry per distinct model FILE for the pickers. The raw list carries a row
   // per variation, so the same GLB repeats dozens of times; the configurator only
@@ -250,7 +262,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const addSlot = () => {
     const used = new Set(config.slots.map((s) => s.materialName))
     const name = materialNames.find((n) => !used.has(n)) ?? materialNames[0] ?? ''
-    const colour = guessByName(name, options, (o) => o.name)
+    const colour = guessByName(name, colourSources, (o) => o.name)
     const size = guessByName(name, attributes, (a) => a.name)
     setConfig((c) => ({
       ...c,
@@ -258,9 +270,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         ...c.slots,
         {
           materialName: name,
-          // With no variation options at all to point at, a fixed colour is the only
-          // route there is, so a new part lands there rather than on an empty dropdown.
-          colourOptionId: colour?.id ?? options[0]?.id ?? MANUAL_COLOUR_ID,
+          // With nothing at all to point at - no variation options, no swatch-carrying
+          // attributes - a fixed colour is the only route there is, so a new part lands
+          // there rather than on an empty dropdown.
+          colourOptionId: colour?.id ?? colourSources[0]?.id ?? MANUAL_COLOUR_ID,
           colourManual: '',
           // With no attributes on the site at all, hand-typed is the only route there
           // is, so a new part starts there rather than on an empty dropdown.
@@ -316,15 +329,21 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
             const colour = parseHexColour(slot.colourManual)
             return colour ? { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 } : null
           }
-          const opt = options.find((o) => o.id === slot.colourOptionId)
+          const opt = colourSources.find((o) => o.id === slot.colourOptionId)
           const swatch = opt?.values.find((v) => v.swatch && /^https?:\/\//.test(v.swatch))?.swatch
-          if (!swatch) return null
+          // A source whose values are plain hex colours rather than pictures paints
+          // flat, exactly as the storefront will: its first colour stands in for the
+          // choice the shopper has not made yet.
+          if (!swatch) {
+            const flat = opt?.values.map((v) => parseHexColour(v.swatch ?? '')).find((c): c is string => c !== null)
+            return flat ? { materialName: slot.materialName, textureUrl: '', colour: flat, repeat: 1, rotationDeg: 0 } : null
+          }
           const density = densities[slot.materialName] ?? 0
           const repeat = density > 0 ? Math.min(50, Math.max(0.01, 1 / (density * 20))) : 1
           return { materialName: slot.materialName, textureUrl: swatch, colour: null, repeat, rotationDeg: slot.rotationDeg }
         })
         .filter((s): s is FabricBundle['slots'][number] => s !== null),
-    [config.slots, options, densities],
+    [config.slots, colourSources, densities],
   )
 
   // Shown as soon as the product's models can be read. It used to hide itself when
@@ -346,7 +365,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         <p className="p3d-fab-help">
           Re-texture the model live from the shopper&rsquo;s choices instead of uploading a separate file per finish.
           Point each material part of the model - upholstery, wood, laminate, metal, whatever the shopper gets to choose -
-          at the option that changes it. On the storefront the model shown is the one attached to the variation the
+          at the thing that changes it: one of the product&rsquo;s own variation options, or one of the site&rsquo;s
+          attributes, whichever your finishes are set up under. On the storefront the model shown is the one attached to the variation the
           shopper picks, painted with their chosen materials. The texture is scaled to true size automatically, from the
           swatch size and overall height you set per variation, or from a size you type in yourself for a finish that is
           the same across the range - no fiddling with tile scale by hand. A part the shopper does not get a say in -
@@ -433,11 +453,26 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               </div>
               <div className="p3d-fab-field">
                 <label className="p3d-fab-label">Colour from</label>
+                {/* Two sources, kept visibly apart: the product's own variation
+                    options, and the site-wide attributes whose values carry a swatch.
+                    Which one a shop's finishes live in is a setup choice, not a rule,
+                    so both are on offer here. */}
                 <select className="p3d-fab-select" value={slot.colourOptionId} onChange={(e) => setSlot(i, { colourOptionId: e.target.value })}>
                   <option value="">option…</option>
-                  {options.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
+                  {variationOptions.length > 0 && (
+                    <optgroup label="Variation options">
+                      {variationOptions.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {colourAttributes.length > 0 && (
+                    <optgroup label="Attributes">
+                      {colourAttributes.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                   <option value={MANUAL_COLOUR_ID}>Manual</option>
                 </select>
               </div>

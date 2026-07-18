@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
-import { listColourOptions } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { listColourAttributes, listColourOptions } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
 // Every unique fabric-swatch texture url a product's variations could paint, so the
 // storefront can warm its texture cache in the background once the product page has
@@ -48,9 +48,15 @@ export async function GET(request: NextRequest) {
     const colourOptionIds = new Set(config.slots.map((s) => s.colourOptionId))
     if (colourOptionIds.size === 0) return json({ urls: [] })
 
-    const options = await listColourOptions(parent)
+    // Both colour sources, since a slot may be painted from a variation option or
+    // from an attribute; the id in the config already says which, so the two lists
+    // are simply searched together.
+    const [variationOptions, colourAttributes] = await Promise.all([
+      listColourOptions(parent),
+      listColourAttributes(),
+    ])
     const urls = new Set<string>()
-    for (const option of options) {
+    for (const option of [...variationOptions, ...colourAttributes]) {
       if (!colourOptionIds.has(option.id)) continue
       for (const value of option.values) {
         if (isHttpUrl(value.swatch)) urls.add(value.swatch)

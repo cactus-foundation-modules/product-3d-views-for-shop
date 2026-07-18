@@ -22,6 +22,37 @@ export const MANUAL_SIZE_ID = '__manual'
 export const MANUAL_COLOUR_ID = '__manual_colour'
 
 /**
+ * A slot's colour can come from a variation OPTION (shop-variations, svr_options)
+ * or from a product ATTRIBUTE (product-attributes-for-shop, pat_attributes) - the
+ * latter since attribute values grew picture swatches of their own, which is often
+ * where a range's finishes actually live. Both are cuids out of different tables,
+ * so an attribute id is stored with this prefix and an option id bare. Anything
+ * without the prefix is an option, which is exactly what every config saved before
+ * attributes were offered contains - no migration needed.
+ */
+export const ATTRIBUTE_COLOUR_PREFIX = 'attr:'
+
+/** The stored id for a colour taken from the attribute `id`. */
+export function attributeColourId(id: string): string {
+  return `${ATTRIBUTE_COLOUR_PREFIX}${id}`
+}
+
+/**
+ * What a stored `colourOptionId` points at. One reader shared by the admin panel,
+ * the resolver and the swatch preloader, so the three can never disagree about
+ * whether a given id is an option, an attribute or the fixed-colour sentinel.
+ */
+export function readColourSource(
+  colourOptionId: string,
+): { kind: 'manual' } | { kind: 'option'; id: string } | { kind: 'attribute'; id: string } {
+  if (colourOptionId === MANUAL_COLOUR_ID) return { kind: 'manual' }
+  if (colourOptionId.startsWith(ATTRIBUTE_COLOUR_PREFIX)) {
+    return { kind: 'attribute', id: colourOptionId.slice(ATTRIBUTE_COLOUR_PREFIX.length) }
+  }
+  return { kind: 'option', id: colourOptionId }
+}
+
+/**
  * A hex colour normalised to `#rrggbb`, or null when the text is not a colour at
  * all. Accepts a leading hash or not, and the three-digit short form, because an
  * admin pasting a brand colour out of a style guide gets any of those. Shared by
