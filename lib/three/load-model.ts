@@ -92,6 +92,12 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
 // trick as the model cache above, so concurrent callers share one load.
 const textureCache = new Map<string, Promise<Texture>>()
 
+// The anisotropy the fabric clones ask for. Higher than any current GPU ceiling
+// on purpose: three clamps it to getMaxAnisotropy() at upload, so this asks for
+// "the GPU's best" without needing the renderer to read that ceiling here - which
+// the repaint path (applyFabricPaint from a colour change) does not have to hand.
+const MAX_ANISOTROPY = 16
+
 async function loadTexture(url: string): Promise<Texture> {
   let entry = textureCache.get(url)
   if (!entry) {
@@ -133,6 +139,16 @@ export async function applyFabricPaint(
   const build = (existing: Texture | null | undefined): Texture => {
     const tex = master.clone()
     tex.colorSpace = three.SRGBColorSpace
+    // Anisotropic filtering, the same treatment applyMaxAnisotropy gives the
+    // model's own maps - but this clone REPLACES the material's baseColor after
+    // that pass has run, so it would otherwise draw at three's default anisotropy
+    // of 1 and wash the weave to a flat, aliased blob the moment the seat tilts or
+    // the view zooms out. That is precisely the "fine fabric looks choppy zoomed
+    // out, fine zoomed in" the configurator's own textures showed. No renderer is
+    // needed to cap it: three clamps anisotropy to the GPU's ceiling at upload
+    // (Math.min(texture.anisotropy, getMaxAnisotropy())), so a high constant is
+    // safe on any GPU and works for both the build and repaint paths.
+    tex.anisotropy = MAX_ANISOTROPY
     tex.wrapS = three.RepeatWrapping
     tex.wrapT = three.RepeatWrapping
     // glTF's UV origin is top-left, so its baseColor maps load flipY=false, while
