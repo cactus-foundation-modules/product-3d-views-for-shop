@@ -50,6 +50,14 @@ async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
     case 'gltf': {
       const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
       const gltf = await new GLTFLoader().loadAsync(url)
+      // GLTFLoader hands the clips back BESIDE the scene, not on it, so returning
+      // gltf.scene alone drops them and an animated file plays as a still. Parking
+      // them on the scene's own `animations` is what makes them survive the clone
+      // in loadModel: Object3D.copy() copies that array by reference, and the clips
+      // bind to nodes by NAME, which cloning preserves. Anything else - userData,
+      // a side map keyed by the master - either gets JSON-mangled by copy() or goes
+      // stale the moment the cache hands out a second instance.
+      gltf.scene.animations = gltf.animations
       return gltf.scene
     }
     case 'obj': {
@@ -408,11 +416,25 @@ export async function applyFabricPaint(
     const mesh = child as Object3D & { material?: unknown }
     const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
     for (const material of materials) {
-      const mat = material as { name?: string; map?: Texture | null; needsUpdate?: boolean }
+      const mat = material as { name?: string; map?: Texture | null; color?: { setRGB: (r: number, g: number, b: number) => void }; needsUpdate?: boolean }
       if (mat.name !== paint.materialName) continue
       // Built lazily off the first matched material, then shared with the rest.
       const tex = texture ?? (texture = build(mat.map))
       mat.map = tex
+      // The base colour MULTIPLIES the map, so whatever tint the material was
+      // carrying would shade the swatch - and the two loaders hand us different
+      // tints for the same surface. A glTF's material arrives at white (its
+      // baseColorFactor defaults to 1,1,1), while a model that shipped without
+      // materials was given UNDESCRIBED_COLOUR by normaliseMaterials, which is
+      // deliberately below white. One swatch on the two files therefore drew ~40%
+      // darker on the OBJ than on the glTF beside it - the same picture, two
+      // finishes, which is exactly what the configurator promises it will not do.
+      // A painted slot means the swatch and nothing else, so the tint goes.
+      //
+      // Also what un-paints a slot switched from a flat colour to a texture: the
+      // branch above writes that colour into `color`, and the repaint path reuses
+      // the same material.
+      mat.color?.setRGB(1, 1, 1)
       mat.needsUpdate = true
     }
   })
