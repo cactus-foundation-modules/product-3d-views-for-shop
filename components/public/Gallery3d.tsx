@@ -37,6 +37,12 @@ const css = `
 .p3d-hint{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:1;pointer-events:none;
   font-size:11px;line-height:1;padding:5px 9px;border-radius:999px;
   background:var(--color-fg);color:var(--color-bg);opacity:.75;white-space:nowrap}
+.p3d-reset{position:absolute;right:8px;bottom:8px;z-index:2;cursor:pointer;border:none;
+  font-family:inherit;font-size:11px;line-height:1;padding:5px 9px;border-radius:999px;
+  background:var(--color-fg);color:var(--color-bg);opacity:.6;white-space:nowrap;
+  transition:opacity .15s ease}
+.p3d-reset:hover,.p3d-reset:focus-visible{opacity:.9}
+@media (prefers-reduced-motion:reduce){.p3d-reset{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
 

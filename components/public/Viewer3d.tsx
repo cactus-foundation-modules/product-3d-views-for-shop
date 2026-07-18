@@ -49,6 +49,12 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
   // the shared master in the texture cache.
   const appliedRef = useRef<Map<string, Texture>>(new Map())
 
+  // Set by build() once the camera, controls and pivot exist, and nulled on
+  // dispose. Same reason as modelRef: those three live only inside build()'s
+  // closure, and the Reset view button below needs a handle on them without
+  // hoisting the whole WebGL setup into React state.
+  const resetRef = useRef<(() => void) | null>(null)
+
   // A stable signature of the paints, so the repaint effect fires on a colour change
   // (same model, new textures) but not on every parent render handing a fresh object.
   const fabricSignature = JSON.stringify(fabric?.slots ?? [])
@@ -264,6 +270,28 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           canvas!.addEventListener('pointercancel', onPointerEnd)
         }
 
+        // Puts the view back where it started. OrbitControls saved the camera's
+        // position and target when it was constructed - which is after the
+        // camera.position.set above, so its saved state IS the opening framing -
+        // and reset() restores both and clears the damping mid-flight, so a
+        // click during a glide does not fight the leftover motion. It fires
+        // 'change', not 'start', so it cannot trip the touched latch and bring
+        // the drag hint back.
+        //
+        // Auto-rotate deliberately stays off: it is killed for good on first
+        // touch, and a model that started turning again under a shopper who
+        // just asked for the view back would read as it running away from them.
+        //
+        // In spin mode the model itself carries the turn, so the camera reset
+        // alone would leave it facing wherever it was dragged to - the pivot and
+        // any leftover flick velocity have to go back too. Both are no-ops in
+        // camera-orbit mode, where nothing in the world ever moves.
+        resetRef.current = () => {
+          controls.reset()
+          pivot.rotation.y = 0
+          spinVelocity = 0
+        }
+
         // The stage is square-ish but sized by shop's layout, so the canvas follows
         // the box rather than the other way round - a fixed size here would letterbox
         // on one theme and overflow on another.
@@ -314,6 +342,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           appliedRef.current.clear()
           modelRef.current = null
           builtUrlRef.current = null
+          resetRef.current = null
           disposeModel(model)
           disposeEnvironment(renderer)
           // Frees the WebGL context itself. Without it, a shopper flicking between
@@ -400,6 +429,16 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
       {/* Says the thing that is not discoverable: that this picture can be
           dragged. Goes the moment they do it, having made its point. */}
       {status === 'ready' && !touched && <span className="p3d-hint">Drag to turn · scroll to zoom</span>}
+      {/* The way back from a view the shopper has turned, zoomed or panned
+          themselves into and cannot easily undo by hand. Only once there is
+          something to reset: while loading or failed there is no camera behind
+          it. Sits above the hint, which is centred and can reach under it on a
+          narrow stage. */}
+      {status === 'ready' && (
+        <button type="button" className="p3d-reset" onClick={() => resetRef.current?.()}>
+          Reset view
+        </button>
+      )}
     </div>
   )
 }
