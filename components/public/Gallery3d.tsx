@@ -53,9 +53,12 @@ function Style() {
 // One auto-rotating thumbnail. The canvas is plain 2D and is painted by the
 // shared renderer (lib/three/thumb-stage.ts) - see there for why every thumbnail
 // on the page draws through a single WebGL context rather than one each.
-function Thumb3d({ item, settings, active, thumbClass, thumbOnClass, onPick }: {
+function Thumb3d({ item, settings, fabric, active, thumbClass, thumbOnClass, onPick }: {
   item: P3dItem
   settings: P3dConfig
+  // Undefined while a painted item's slots are still being fetched (the thumbnail
+  // mounts unpainted rather than waiting), null for an item nothing paints.
+  fabric?: FabricBundle['slots'] | null
   active: boolean
   thumbClass: string
   thumbOnClass: string
@@ -63,6 +66,13 @@ function Thumb3d({ item, settings, active, thumbClass, thumbOnClass, onPick }: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [failed, setFailed] = useState(false)
+
+  // The slots as they were the moment this effect last ran, so a colour change
+  // after the fetch lands is a dependency change here too - the thumbnail is
+  // remounted, same as the stage rebuilds on an item.url change. A thumbnail is
+  // cheap enough (64px, geometry already cached) that this costs nothing next to
+  // the "the small picture doesn't match the big one" it fixes.
+  const fabricSignature = JSON.stringify(fabric ?? [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -81,7 +91,7 @@ function Thumb3d({ item, settings, active, thumbClass, thumbOnClass, onPick }: {
     loadModel(item.url, item.format)
       .then(async (model) => {
         if (cancelled) return
-        teardown = await mountThumb(canvas, model, settings)
+        teardown = await mountThumb(canvas, model, settings, fabric ?? [])
         if (!teardown) setFailed(true)
         // Mounted after the await resolved but cancelled meanwhile: tear it
         // straight back down, or a model outlives the thumbnail that asked for it.
@@ -93,9 +103,11 @@ function Thumb3d({ item, settings, active, thumbClass, thumbOnClass, onPick }: {
     // settings is page-static (server-resolved, never changes without a reload
     // that remounts this), so it is read at mount rather than watched - watching a
     // fresh object each render would rebuild every thumbnail on the page on every
-    // parent render.
+    // parent render. fabric is read through fabricSignature instead of itself: a
+    // fresh array/object each render must not remount the thumbnail, only an
+    // actual change of colour should.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.url, item.format])
+  }, [item.url, item.format, fabricSignature])
 
   return (
     <button
@@ -207,20 +219,39 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
 
   if (items.length === 0) return null
 
+  // Same rule the stage uses to decide painted vs plain (see Gallery3dStage): a
+  // variation's own model, on a product configured for fabric, is live-coloured -
+  // and that has to include its thumbnail, or the small picture in the strip
+  // shows the file's original colours while the big view the shopper is looking
+  // at shows the ones they actually chose.
+  const painted = (item: P3dItem): boolean => Boolean(data.fabric) && item.productId !== data.parentProductId
+
   return (
     <>
       <Style />
-      {items.map((item) => (
-        <Thumb3d
-          key={item.key}
-          item={item}
-          settings={data.settings}
-          active={item.key === activeKey}
-          thumbClass={thumbClass}
-          thumbOnClass={thumbOnClass}
-          onPick={() => onPick(item.key)}
-        />
-      ))}
+      {items.map((item) =>
+        painted(item) ? (
+          <PaintedThumb3d
+            key={item.key}
+            payload={data}
+            item={item}
+            active={item.key === activeKey}
+            thumbClass={thumbClass}
+            thumbOnClass={thumbOnClass}
+            onPick={() => onPick(item.key)}
+          />
+        ) : (
+          <Thumb3d
+            key={item.key}
+            item={item}
+            settings={data.settings}
+            active={item.key === activeKey}
+            thumbClass={thumbClass}
+            thumbOnClass={thumbOnClass}
+            onPick={() => onPick(item.key)}
+          />
+        ),
+      )}
     </>
   )
 }
@@ -249,6 +280,43 @@ function fetchBundle(parentProductId: string, childProductId: string): Promise<F
     bundleCache.set(key, entry)
   }
   return entry
+}
+
+// Thumbnail counterpart to PaintedStage: fetches the same cached bundle (the
+// shared fetchBundle cache below means this is a memory hit whenever the stage
+// has already resolved this variation, which is the common case - the shopper
+// picked the option, the stage fetched, and the thumbnail asks a beat later)
+// and hands the slots to Thumb3d. Slots start null and the thumbnail mounts
+// unpainted until they land, same as the stage does.
+function PaintedThumb3d({ payload, item, active, thumbClass, thumbOnClass, onPick }: {
+  payload: P3dPayload
+  item: P3dItem
+  active: boolean
+  thumbClass: string
+  thumbOnClass: string
+  onPick: () => void
+}) {
+  const [slots, setSlots] = useState<FabricBundle['slots'] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchBundle(payload.parentProductId, item.productId)
+      .then((bundle) => { if (!cancelled) setSlots(bundle?.slots ?? []) })
+      .catch(() => { if (!cancelled) setSlots([]) })
+    return () => { cancelled = true }
+  }, [payload.parentProductId, item.productId])
+
+  return (
+    <Thumb3d
+      item={item}
+      settings={payload.settings}
+      fabric={slots}
+      active={active}
+      thumbClass={thumbClass}
+      thumbOnClass={thumbOnClass}
+      onPick={onPick}
+    />
+  )
 }
 
 // The stage for a variation's own model: the picked file, re-textured live from the

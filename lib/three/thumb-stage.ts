@@ -1,8 +1,9 @@
 'use client'
 
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
-import { addLights, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
+import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 
 // Drives every auto-rotating 3D thumbnail on the page from ONE WebGL context.
 //
@@ -125,7 +126,12 @@ function start(): void {
  * Returns null when this browser cannot render at all, which the caller shows as
  * a plain still rather than a broken box.
  */
-export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D, settings: P3dConfig): Promise<(() => void) | null> {
+export async function mountThumb(
+  canvas: HTMLCanvasElement,
+  model: Object3D,
+  settings: P3dConfig,
+  fabric?: FabricBundle['slots'],
+): Promise<(() => void) | null> {
   // Captured before the renderer is built, so getRenderer sees the owner's
   // antialias/pixel-ratio choices on the very first thumbnail rather than a frame
   // late. Every thumbnail passes the same settings, so a later mount overwriting
@@ -143,6 +149,15 @@ export async function mountThumb(canvas: HTMLCanvasElement, model: Object3D, set
   // Same filtering the stage viewer gets: a thumbnail spins, so its surfaces are
   // seen at an angle constantly, and without this the weave on them muddies too.
   applyMaxAnisotropy(model, active)
+
+  // Same paints the stage is showing, or the thumbnail underneath a painted
+  // variation shows the file's original colours while the shopper's chosen
+  // fabric is only on the big view - the exact "which one is real" confusion the
+  // gallery is meant to avoid. disposeModel below frees these same as any other
+  // material map, painted or not.
+  for (const slot of fabric ?? []) {
+    await applyFabricPaint(model, slot)
+  }
 
   const camera = new PerspectiveCamera(40, 1, 0.1, 100)
   camera.position.set(0, 0.6, 4)
