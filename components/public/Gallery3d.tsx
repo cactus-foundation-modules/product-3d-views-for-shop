@@ -219,21 +219,52 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
   )
 }
 
+// Resolved fabric bundles held by parent|child, so flicking back to a colour already
+// seen paints from memory rather than re-resolving it server-side. Module-scoped and
+// keyed by the pair the resolver itself keys on; a page's worth of colours is a bounded
+// set, and the data is per-variation catalogue data that does not change under the
+// shopper. Holds the PROMISE, so two picks of the same child in quick succession share
+// one request rather than racing - the same bargain the model and texture caches make.
+const bundleCache = new Map<string, Promise<FabricBundle | null>>()
+
+function fetchBundle(parentProductId: string, childProductId: string): Promise<FabricBundle | null> {
+  const key = `${parentProductId}|${childProductId}`
+  let entry = bundleCache.get(key)
+  if (!entry) {
+    const url = `/api/m/product-3d-views-for-shop/fabric/x?parent=${encodeURIComponent(parentProductId)}&child=${encodeURIComponent(childProductId)}`
+    entry = fetch(url)
+      .then((r) => (r.ok ? (r.json() as Promise<FabricBundle | null>) : null))
+      // A failed resolve must not be cached, or a shopper whose connection blipped is
+      // handed the same failure for that colour for the rest of their visit.
+      .catch((error) => {
+        bundleCache.delete(key)
+        throw error
+      })
+    bundleCache.set(key, entry)
+  }
+  return entry
+}
+
 // The stage for a variation's own model: the picked file, re-textured live from the
-// shopper's choices. It fetches the resolved fabric slots for the variation the
-// model hangs off and hands Viewer3d the paints; a colour change repaints in place,
-// handled inside Viewer3d. The model shown is the picked item itself, so it is on
-// screen unpainted from the first frame and gains its fabric once the fetch lands.
+// shopper's choices. It fetches the resolved fabric slots for the variation the model
+// hangs off and hands Viewer3d the paints; a colour change repaints in place, handled
+// inside Viewer3d.
+//
+// This component is NOT remounted on a variation change (see the call site) - it
+// persists, so the WebGL context and the model on it survive a colour pick and only
+// the painted texture changes. That is what makes a colour change cheap.
 function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem }) {
-  // The resolved slots, or null while the fetch is in flight - rendered unpainted
-  // until then. Held as state so a freshly fetched bundle repaints the stage.
+  // The resolved slots, or null before the first fetch lands - rendered unpainted until
+  // then. On a LATER colour change the previous colours deliberately stay on screen
+  // while the new bundle is in flight: the model is already correct and only its fabric
+  // is about to change, so holding the old texture for that moment reads as the colour
+  // updating, where blanking to unpainted would read as the model breaking and coming
+  // back.
   const [slots, setSlots] = useState<FabricBundle['slots'] | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    const url = `/api/m/product-3d-views-for-shop/fabric/x?parent=${encodeURIComponent(payload.parentProductId)}&child=${encodeURIComponent(item.productId)}`
-    fetch(url)
-      .then((r) => (r.ok ? (r.json() as Promise<FabricBundle | null>) : null))
+    fetchBundle(payload.parentProductId, item.productId)
       .then((bundle) => {
         // A variation the resolver could not place (missing config, absent companion
         // tables) resolves to no paints, and the model stays on the stage unpainted
@@ -243,8 +274,7 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
       .catch(() => { if (!cancelled) setSlots([]) })
     return () => { cancelled = true }
     // payload.parentProductId is page-static; the variation whose model this is drives
-    // the fetch. This component is keyed by item.productId at the call site, so a
-    // variation change remounts it and the slots reset to null (unpainted) for free.
+    // the fetch, and a cached bundle resolves on the spot.
   }, [payload.parentProductId, item.productId])
 
   return <Viewer3d item={item} settings={payload.settings} fabric={{ slots: slots ?? [] }} />
@@ -267,7 +297,18 @@ export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps)
     <>
       <Style />
       {painted
-        ? <PaintedStage key={item.productId} payload={data} item={item} />
+        // Deliberately NOT keyed by item.productId. A colour change is a different
+        // variant child, so keying on it remounted this whole subtree on every colour
+        // pick - tearing down the WebGL context and rebuilding it (new renderer, a
+        // freshly generated PMREM environment, the model re-cloned and re-uploaded to
+        // the GPU, re-framed, shadow catcher rebuilt) for what is only a change of
+        // texture on one material. That rebuild, not the texture fetch, was the bulk
+        // of the seconds a shopper waited on each option change, and it made Viewer3d's
+        // whole repaint-in-place path unreachable for the exact case it was written
+        // for. Unkeyed, the viewer persists: Viewer3d rebuilds only when item.url
+        // genuinely changes (a headrest-style model swap), and a plain colour change
+        // repaints in place.
+        ? <PaintedStage payload={data} item={item} />
         : <Viewer3d item={item} settings={data.settings} />}
     </>
   )
