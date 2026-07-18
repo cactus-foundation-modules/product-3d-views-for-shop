@@ -3,6 +3,7 @@ import { composeFabricBundle, parseSwatchCm, tileRepeat } from '@/modules/produc
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
+import { MANUAL_SIZE_ID } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 
 // Ids kept short and named so a failing assertion reads on its own.
 const OPT_SEAT_COLOUR = 'opt-seat-colour'
@@ -21,13 +22,14 @@ const TEAL_URL = 'https://cdn.example.com/colours/quest-teal.webp'
 function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
   return {
     heightAttributeId: ATTR_HEIGHT,
+    heightManual: '',
     // Each model's bounding-box height in its own units, as measured at config time.
     // Read by the resolver by file url; composeFabricBundle takes the resolved number
     // directly, so these are here only to satisfy the config shape.
     modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
     slots: [
-      { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: ATTR_SEAT_SIZE, texelDensity: 1 },
-      { materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE, texelDensity: 1 },
+      { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: ATTR_SEAT_SIZE, sizeManual: '', texelDensity: 1 },
+      { materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE, sizeManual: '', texelDensity: 1 },
     ],
     ...overrides,
   }
@@ -160,6 +162,68 @@ describe('composeFabricBundle', () => {
     // Seat colour still applies; scale is neutral until the data is filled in. Back
     // has no colour chosen, so it is skipped entirely.
     expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, repeat: 1 }])
+  })
+
+  it('takes a hand-typed size for a slot set to Manual, ignoring the attributes', () => {
+    const bundle = composeFabricBundle(
+      config({
+        slots: [
+          { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '200mm', texelDensity: 1 },
+        ],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        // A seat-size attribute value the slot must NOT read now it is manual.
+        { attributeId: ATTR_SEAT_SIZE, label: '10x10cm' },
+      ],
+    )
+    // 200mm is 20cm: 200/(100*1*20) = 0.1, not the attribute's 10cm -> 0.2.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('takes a hand-typed overall height, ignoring the height attribute', () => {
+    const bundle = composeFabricBundle(
+      config({ heightAttributeId: MANUAL_SIZE_ID, heightManual: '2m' }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        // A height attribute value the config must NOT read now it is manual.
+        { attributeId: ATTR_HEIGHT, label: '400cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    // 2m is 200cm: 200/(100*1*20) = 0.1, not the attribute's 400cm -> 0.2.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('leaves every slot at repeat 1 when the manual height is blank', () => {
+    const bundle = composeFabricBundle(
+      config({ heightAttributeId: MANUAL_SIZE_ID, heightManual: '' }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [{ attributeId: ATTR_SEAT_SIZE, label: '20x20cm' }],
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(1)
+  })
+
+  it('leaves a Manual slot at repeat 1 when nothing has been typed yet', () => {
+    const bundle = composeFabricBundle(
+      config({
+        slots: [
+          { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '', texelDensity: 1 },
+        ],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(1)
   })
 
   it('leaves a slot at repeat 1 when the model is not calibrated', () => {

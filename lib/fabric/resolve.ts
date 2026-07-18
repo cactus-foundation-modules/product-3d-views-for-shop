@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
+import { MANUAL_SIZE_ID } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -113,7 +114,12 @@ export function composeFabricBundle(
   // model's own units (measured at config time). Together they give cm-per-model-unit,
   // which is what turns a swatch's real size into a true-scale tile repeat. Both are
   // needed; either absent leaves tiling uncalibrated (repeat 1).
-  const heightLabel = config.heightAttributeId ? sizes.find((z) => z.attributeId === config.heightAttributeId)?.label : undefined
+  const heightLabel =
+    config.heightAttributeId === MANUAL_SIZE_ID
+      ? config.heightManual
+      : config.heightAttributeId
+        ? sizes.find((z) => z.attributeId === config.heightAttributeId)?.label
+        : undefined
   const heightCm = heightLabel ? parseSwatchCm(heightLabel) : null
 
   const slots = config.slots
@@ -121,7 +127,14 @@ export function composeFabricBundle(
       const choice = selected.find((s) => s.optionId === slot.colourOptionId)
       const textureUrl = choice?.swatch ?? ''
       if (!isHttpUrl(textureUrl)) return null
-      const sizeLabel = sizes.find((z) => z.attributeId === slot.sizeAttributeId)?.label ?? ''
+      // A hand-typed size is a fact about the SURFACE, not about the variation, so
+      // it applies to every child alike - a laminate's repeat does not change with
+      // the seat colour. Read by the same parser as an attribute label, so the two
+      // routes behave identically from here on.
+      const sizeLabel =
+        slot.sizeAttributeId === MANUAL_SIZE_ID
+          ? slot.sizeManual
+          : sizes.find((z) => z.attributeId === slot.sizeAttributeId)?.label ?? ''
       const swatchCm = parseSwatchCm(sizeLabel)
       const repeat = tileRepeat({ heightCm, modelHeightUnits, texelDensity: slot.texelDensity, swatchCm })
       return { materialName: slot.materialName, textureUrl, repeat }

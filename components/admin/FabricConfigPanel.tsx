@@ -1,9 +1,14 @@
 'use client'
 
-// The fabric configurator's admin panel, shown below the model list on a product
+// The material configurator's admin panel, shown below the model list on a product
 // that has variations. It maps the model's named material slots to the product's
 // colour options, points the whole thing at the size and overall-height attributes,
 // and saves on its own button (not the editor's), the same as the model list above.
+//
+// "Material" not "fabric": the same mechanism paints a woven seat, a laminate desk
+// top and a veneer side panel - anything whose surface is chosen by the shopper. The
+// stored shape still says fabric (FabricConfig, p3d_fabric_configs), because renaming
+// a saved column buys nothing; only the words the admin reads have changed.
 //
 // The tile SCALE is not set by hand. The model's real-world scale is pinned by the
 // "Overall height" attribute (a real cm value, set per variation), and the rest is
@@ -14,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
+import { MANUAL_SIZE_ID } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import type { FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
@@ -21,7 +27,7 @@ import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-
 
 type FabricSlot = FabricConfig['slots'][number]
 
-const EMPTY: FabricConfig = { heightAttributeId: '', modelHeights: {}, slots: [] }
+const EMPTY: FabricConfig = { heightAttributeId: '', heightManual: '', modelHeights: {}, slots: [] }
 
 // Words that describe the KIND of thing rather than which part it is, dropped
 // before name-matching so "Fabric seat" pairs with "Seat Colour" on "seat" and not
@@ -222,7 +228,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         applyMeasurement(m)
         setMessage(
           m.names.length > 0
-            ? { kind: 'ok', text: `Read ${m.names.length} fabric ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` }
+            ? { kind: 'ok', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` }
             : { kind: 'err', text: 'That model has no named materials to texture. Re-export it with its materials named, then try again.' },
         )
       })
@@ -248,7 +254,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         {
           materialName: name,
           colourOptionId: colour?.id ?? options[0]?.id ?? '',
-          sizeAttributeId: size?.id ?? attributes[0]?.id ?? '',
+          // With no attributes on the site at all, hand-typed is the only route there
+          // is, so a new part starts there rather than on an empty dropdown.
+          sizeAttributeId: size?.id ?? attributes[0]?.id ?? MANUAL_SIZE_ID,
+          sizeManual: '',
           // Measured on save from `densities`; 0 until then.
           texelDensity: 0,
         },
@@ -275,10 +284,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         setMessage({ kind: 'ok', text: 'Saved.' })
       } else {
         const body = await res.json().catch(() => ({}))
-        setMessage({ kind: 'err', text: body.error ?? 'Could not save the fabric configuration.' })
+        setMessage({ kind: 'err', text: body.error ?? 'Could not save the material configuration.' })
       }
     } catch {
-      setMessage({ kind: 'err', text: 'Could not save the fabric configuration.' })
+      setMessage({ kind: 'err', text: 'Could not save the material configuration.' })
     } finally {
       setSaving(false)
     }
@@ -303,11 +312,13 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     [config.slots, options, densities],
   )
 
-  // The panel is size-driven: without a size attribute there is nothing to scale the
-  // weave against, so it stays hidden and the product's models behave as plain 3D
-  // views. (The parent only mounts this for a product with variations.)
+  // Shown as soon as the product's models can be read. It used to hide itself when
+  // the site had no size attributes, on the grounds that there was nothing to scale
+  // against - but every measurement can now be typed in by hand, so a site without
+  // the product-attributes module can configure the whole thing, and hiding the panel
+  // would only leave the admin wondering where it went. (The parent mounts this only
+  // for a product with variations.)
   if (loading) return null
-  if (attributes.length === 0) return null
 
   const materialOptions = (current: string): string[] =>
     materialNames.includes(current) || !current ? materialNames : [current, ...materialNames]
@@ -316,13 +327,14 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     <div className="p3d-fab">
       <style dangerouslySetInnerHTML={{ __html: css }} />
       <div>
-        <h4 className="p3d-fab-h">Fabric configurator</h4>
+        <h4 className="p3d-fab-h">Material configurator</h4>
         <p className="p3d-fab-help">
-          Re-texture the model live from the shopper&rsquo;s choices instead of uploading a separate file per colour.
-          Point each fabric part of the model at the colour option that changes it. On the storefront the model shown is
-          the one attached to the variation the shopper picks, painted with their chosen colours. The weave is scaled to
-          true size automatically, from the swatch size and overall height you set per variation - no fiddling with tile
-          scale by hand.
+          Re-texture the model live from the shopper&rsquo;s choices instead of uploading a separate file per finish.
+          Point each material part of the model - upholstery, wood, laminate, metal, whatever the shopper gets to choose -
+          at the option that changes it. On the storefront the model shown is the one attached to the variation the
+          shopper picks, painted with their chosen materials. The texture is scaled to true size automatically, from the
+          swatch size and overall height you set per variation, or from a size you type in yourself for a finish that is
+          the same across the range - no fiddling with tile scale by hand.
         </p>
       </div>
 
@@ -339,19 +351,37 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               {attributes.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}
+              <option value={MANUAL_SIZE_ID}>Manual</option>
             </select>
           </div>
+          {/* Manual: one height for every variation, typed here. Worth having for a
+              product that varies in colour but not in size, and the only route at all
+              on a site without the product-attributes module. */}
+          {config.heightAttributeId === MANUAL_SIZE_ID && (
+            <div className="p3d-fab-field">
+              <label className="p3d-fab-label">Overall height</label>
+              <input
+                type="text"
+                className="p3d-fab-select"
+                value={config.heightManual}
+                placeholder="e.g. 72cm"
+                onChange={(e) => setConfig((c) => ({ ...c, heightManual: e.target.value }))}
+              />
+            </div>
+          )}
           <p className="p3d-fab-help" style={{ flex: 1, minWidth: '12rem' }}>
-            The attribute holding the product&rsquo;s real overall height in cm, set per variation. It pins the model&rsquo;s
-            true size so the weave scales correctly. The configurator lights up once at least one fabric part is set below.
+            The product&rsquo;s real overall height in cm. It pins the model&rsquo;s true size so the texture scales
+            correctly. Point it at an attribute when the height changes from one variation to the next, or choose
+            <strong> Manual</strong> and type it once when every variation stands the same height. The configurator
+            lights up once at least one material part is set below.
           </p>
         </div>
       </div>
 
-      {/* Fabric parts: named material slots, painted from a colour option. */}
+      {/* Material parts: named material slots, painted from a colour option. */}
       <div className="p3d-fab-sec">
         <div className="p3d-fab-actions">
-          <p className="p3d-fab-sub" style={{ margin: 0 }}>Fabric parts</p>
+          <p className="p3d-fab-sub" style={{ margin: 0 }}>Material parts</p>
           <button type="button" className="btn btn-secondary btn-sm" onClick={detect} disabled={measuring || !faceModel}>
             {measuring ? 'Reading model…' : 'Detect from model'}
           </button>
@@ -362,7 +392,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         </div>
         {materialNames.length === 0 && (
           <p className="p3d-fab-help">
-            No fabric parts read from the model yet. Attach a 3D model to this product, then use <strong>Detect from model</strong>.
+            No material parts read from the model yet. Attach a 3D model to this product, then use <strong>Detect from model</strong>.
           </p>
         )}
         {config.slots.map((slot, i) => {
@@ -394,10 +424,25 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   {attributes.map((a) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
                   ))}
+                  <option value={MANUAL_SIZE_ID}>Manual</option>
                 </select>
               </div>
+              {/* Manual: the size is typed here rather than read per variation. Same
+                  parser either way, so "20cm", "200mm" and a bare "20" all read alike. */}
+              {slot.sizeAttributeId === MANUAL_SIZE_ID && (
+                <div className="p3d-fab-field">
+                  <label className="p3d-fab-label">Size</label>
+                  <input
+                    type="text"
+                    className="p3d-fab-select"
+                    value={slot.sizeManual}
+                    placeholder="e.g. 20cm"
+                    onChange={(e) => setSlot(i, { sizeManual: e.target.value })}
+                  />
+                </div>
+              )}
               <span className={`p3d-fab-tag ${measured ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
-                {measured ? 'weave scale measured' : 'not measured - use Detect'}
+                {measured ? 'texture scale measured' : 'not measured - use Detect'}
               </span>
               <span className="p3d-fab-spacer" />
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => removeSlot(i)}>Remove</button>
@@ -405,7 +450,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           )
         })}
         <div className="p3d-fab-actions">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={addSlot} disabled={materialNames.length === 0}>+ Add fabric part</button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={addSlot} disabled={materialNames.length === 0}>+ Add material part</button>
           {previewSlots.length > 0 && faceModel && settings && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowPreview((v) => !v)}>
               {showPreview ? 'Hide preview' : 'Preview colours'}
@@ -416,7 +461,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
 
       {showPreview && faceModel && settings && (
         <>
-          <p className="p3d-fab-help">Colour and placement preview. On the storefront the weave scale is set exactly from each variation&rsquo;s size and height.</p>
+          <p className="p3d-fab-help">Colour and placement preview. On the storefront the texture scale is set exactly from each part&rsquo;s size and the variation&rsquo;s height.</p>
           <div className="p3d-fab-preview">
             <Viewer3d
               item={{ key: 'fabric-preview', productId, url: faceModel.url, format: faceModel.format, label: `${formatLabel(faceModel.format)} preview` }}
@@ -429,7 +474,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
 
       <div className="p3d-fab-actions">
         <button type="button" className="btn btn-primary btn-sm" onClick={() => void save()} disabled={saving}>
-          {saving ? 'Saving…' : 'Save fabric configuration'}
+          {saving ? 'Saving…' : 'Save material configuration'}
         </button>
         {message && (
           <p className={`p3d-fab-msg ${message.kind === 'ok' ? 'p3d-fab-msg-ok' : 'p3d-fab-msg-err'}`}>{message.text}</p>

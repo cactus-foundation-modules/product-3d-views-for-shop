@@ -18,8 +18,15 @@ const FabricSlotSchema = z.object({
   materialName: z.string(),
   // svr_options id whose selected value's swatch gives this slot's texture url.
   colourOptionId: z.string(),
-  // pat_attributes id whose value gives the real-world swatch size for tiling.
+  // pat_attributes id whose value gives the real-world swatch size for tiling, or
+  // MANUAL_SIZE_ID when the size is typed by hand into `sizeManual` below.
   sizeAttributeId: z.string(),
+  // The hand-typed swatch size, used only when sizeAttributeId is MANUAL_SIZE_ID.
+  // Read by the same parser as an attribute's label, so "20cm", "200mm" and a bare
+  // "20" all work. Not every surface has a per-variation size attribute behind it -
+  // a laminate or a veneer finish is often one fixed repeat across the whole range -
+  // and inventing an attribute per such surface is a lot of admin for one number.
+  sizeManual: z.string().default(''),
   // This material's texel density, measured from the model in the browser at config
   // time (the server never parses a GLB): UV units per model-unit, i.e. how the
   // material's texture is stretched across its geometry. Combined with the model's
@@ -33,7 +40,15 @@ export const FabricConfigSchema = z.object({
   // height in cm. That one real dimension pins the model's real-world scale (the
   // file carries geometry but not reliably its unit - mm vs metres), from which
   // every fabric surface's true size, and so its tile density, is derived.
+  // May hold MANUAL_SIZE_ID, in which case the height is the hand-typed
+  // `heightManual` below instead.
   heightAttributeId: z.string().default(''),
+  // The hand-typed overall height, used only when heightAttributeId is
+  // MANUAL_SIZE_ID. A product whose variations differ in colour but not in size
+  // has one height for the lot, and a site without the product-attributes module
+  // has no attribute to point at at all - either way, typing "72cm" once beats
+  // inventing an attribute and setting the same value on every variation.
+  heightManual: z.string().default(''),
   // Each attached model's bounding-box height in its OWN units, measured from the
   // mesh at config time. Keyed by p3d_models id, but the height belongs to the FILE
   // (its url), so the resolver reads it by url - the same GLB attached to several
