@@ -7,16 +7,23 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 //
 // The rule, in the order the cases matter:
 //
-//  - A model on the product itself describes the product, so it always shows.
+//  - A model on the product itself describes the product, so it shows while
+//    nothing more specific is on offer.
 //  - Models on variations stay hidden until the shopper actually chooses that
 //    variation. Before a choice, the strip shows only what is attached to the
 //    product itself - the same rule the photo gallery already follows (a variant's
 //    own image only appears once that variant is picked). Splashing every
 //    variation's model up front is misleading: a shopper who has picked nothing is
 //    looking at oak, walnut and ash at once with no idea which they will get.
-//  - Once a variation is chosen, that one's model joins the product's own. The
-//    rest would be actively misleading - a shopper looking at the oak model having
-//    picked walnut.
+//  - Once a variation carrying its own model is chosen, that model replaces the
+//    product's own rather than sitting beside it. The chosen model is the exact
+//    thing being bought; the generic one is then a second, near-identical
+//    thumbnail of something the shopper is not ordering, and picking it shows
+//    them the wrong item.
+//  - Other variations' models are dropped either way - a shopper looking at the
+//    oak model having picked walnut.
+//  - A chosen variation with no model of its own leaves the product's own model
+//    in place; something is better than an empty strip.
 //  - Two variations sharing one file are one thumbnail, not two. Sites reuse the
 //    same model across a size run constantly (same shape, different dimensions),
 //    and the honest reading of two identical thumbnails is that something is
@@ -30,11 +37,13 @@ export function visibleItems(payload: P3dPayload, activeProductId: string | null
     ? variation.filter((i) => i.productId === activeProductId)
     : []
 
-  return dedupeByUrl([...own, ...relevant])
+  if (relevant.length > 0) return dedupeByUrl(relevant)
+
+  return dedupeByUrl(own)
 }
 
-// First occurrence wins, so the product's own model keeps its place at the front
-// of the strip when a variation happens to point at the same file.
+// First occurrence wins, so the strip keeps the order the models were attached in
+// when two rows of one variation point at the same file.
 function dedupeByUrl(items: P3dItem[]): P3dItem[] {
   const seen = new Set<string>()
   const out: P3dItem[] = []

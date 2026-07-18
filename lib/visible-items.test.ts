@@ -54,8 +54,8 @@ describe('visibleItems', () => {
     expect(keys(visibleItems(p, OAK))).toEqual(['a'])
   })
 
-  it('keeps distinct files distinct', () => {
-    const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
+  it('keeps distinct files of one chosen variation distinct', () => {
+    const p = payload([item('a', OAK, '/a.glb'), item('b', OAK, '/b.glb')])
     expect(visibleItems(p, OAK)).toHaveLength(2)
   })
 
@@ -64,16 +64,32 @@ describe('visibleItems', () => {
     expect(keys(visibleItems(p, null))).toEqual(['own'])
   })
 
-  it("shows the product's own model alongside the chosen variation's", () => {
+  // The point of this change: a chosen variation that brings its own model takes
+  // the strip over, so the shopper is not offered the generic product model next
+  // to the one they configured.
+  it("hides the product's own model once the chosen variation brings one", () => {
     const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
-    expect(keys(visibleItems(p, null))).toEqual(['own'])
-    expect(keys(visibleItems(p, OAK))).toEqual(['own', 'oak'])
+    expect(keys(visibleItems(p, OAK))).toEqual(['oak'])
   })
 
-  // A variation pointing at the product's own file must not draw it twice, and
-  // the product's own entry is the one that survives.
-  it('keeps the parent entry when a variation reuses the same file', () => {
+  it('hides every parent model, not just the first, when a variation brings one', () => {
+    const p = payload([
+      item('own1', PARENT, '/own1.glb'),
+      item('own2', PARENT, '/own2.glb'),
+      item('oak', OAK, '/oak.glb'),
+    ])
+    expect(keys(visibleItems(p, OAK))).toEqual(['oak'])
+  })
+
+  // A chosen variation with nothing of its own leaves the product's model up -
+  // an empty stage would be a downgrade on picking a size.
+  it("keeps the product's own model when the chosen variation has none", () => {
+    const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
+    expect(keys(visibleItems(p, WALNUT))).toEqual(['own'])
+  })
+
+  it('shows one thumbnail when a variation reuses the product own file', () => {
     const p = payload([item('own', PARENT, '/chair.glb'), item('oak', OAK, '/chair.glb')])
-    expect(keys(visibleItems(p, OAK))).toEqual(['own'])
+    expect(keys(visibleItems(p, OAK))).toEqual(['oak'])
   })
 })
