@@ -83,6 +83,34 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
   return (await entry).clone(true)
 }
 
+/**
+ * Warm the model cache for a url WITHOUT cloning the result. A background preload
+ * (see lib/preload.ts) only wants the fetch + parse done and held in the cache, so
+ * that a later real loadModel() for the same url clones from memory rather than
+ * waiting on the network - which is the few-second lag a variation switch otherwise
+ * pays. Deliberately shares loadModel's cache and its "hold the promise" trick, so a
+ * real load landing mid-preload awaits the same parse rather than racing a second.
+ *
+ * Best-effort: any failure is swallowed. A model that cannot be reached now must not
+ * surface from a background task the shopper never asked for; the cache does not keep
+ * the rejection (see loadModel), so the real load retries and reports it then.
+ */
+export async function prefetchModel(url: string, format: P3dFormat): Promise<void> {
+  try {
+    let entry = cache.get(url)
+    if (!entry) {
+      entry = parse(url, format).catch((error) => {
+        cache.delete(url)
+        throw error
+      })
+      cache.set(url, entry)
+    }
+    await entry
+  } catch {
+    // Swallowed on purpose - see the note above.
+  }
+}
+
 // Fabric textures cached by url, so re-selecting a colour is instant - no second
 // fetch, no second decode. The MASTER texture stays here and is never disposed: a
 // fabric range is a few dozen colours, which is a bounded, acceptable cache. Each
@@ -111,6 +139,21 @@ async function loadTexture(url: string): Promise<Texture> {
     textureCache.set(url, entry)
   }
   return entry
+}
+
+/**
+ * Warm the fabric texture cache for a url, for the same background preload. loadTexture
+ * already holds the master keyed by url and never poisons the cache on failure, so this
+ * is a fire-and-forget wrapper that swallows a preload-time failure: a real paint for
+ * that colour will retry and, if it still cannot fetch, simply leaves the slot
+ * unpainted rather than surfacing an error the shopper never asked for.
+ */
+export async function prefetchTexture(url: string): Promise<void> {
+  try {
+    await loadTexture(url)
+  } catch {
+    // Swallowed on purpose - see the note above.
+  }
 }
 
 /**

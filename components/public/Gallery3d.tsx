@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
 import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { preloadProductAssets } from '@/modules/product-3d-views-for-shop/lib/preload'
 import { mountThumb } from '@/modules/product-3d-views-for-shop/lib/three/thumb-stage'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import type { P3dItem, P3dPayload, FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
@@ -163,6 +164,40 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
     // source, not triggers, and watching them would re-lead on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProductId])
+
+  // Warm the model and swatch caches in the background once the page has settled, so a
+  // later variation change paints from memory instead of fetching. Scheduled on idle
+  // so it trails first paint rather than competing with it, and aborted on unmount so
+  // a shopper who leaves does not leave a preload running. A real pick that lands mid
+  // preload is not fought: it shares the same cached promise (see load-model.ts).
+  useEffect(() => {
+    const controller = new AbortController()
+    type IdleWindow = Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+    const w = window as IdleWindow
+    let idle: number | null = null
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const start = (): void => { void preloadProductAssets(data, controller.signal) }
+    // requestIdleCallback where the browser has it (it waits for a genuine lull); a
+    // short timeout everywhere else (Safari has no rIC), so the preload always trails
+    // first paint rather than landing in the middle of it.
+    if (typeof w.requestIdleCallback === 'function') {
+      idle = w.requestIdleCallback(start, { timeout: 3000 })
+    } else {
+      timer = setTimeout(start, 1200)
+    }
+    return () => {
+      controller.abort()
+      if (idle !== null) w.cancelIdleCallback?.(idle)
+      if (timer !== null) clearTimeout(timer)
+    }
+    // Runs once on mount. `data` is the server-resolved, page-static payload - it does
+    // not change without a navigation that remounts this - so it is read here rather
+    // than watched, matching how the thumbnails and viewer treat settings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (items.length === 0) return null
 
