@@ -58,7 +58,25 @@ describe('parseSwatchCm', () => {
     expect(parseSwatchCm('137cm')).toBe(137)
   })
 
-  it('takes the first integer for a non-square label (v1 assumes square)', () => {
+  it('converts a millimetre value to centimetres', () => {
+    expect(parseSwatchCm('1070mm')).toBe(107)
+    expect(parseSwatchCm('200 mm')).toBe(20)
+    expect(parseSwatchCm('20x20mm')).toBe(2)
+  })
+
+  it('converts a metre value to centimetres', () => {
+    expect(parseSwatchCm('1.07m')).toBeCloseTo(107)
+  })
+
+  it('reads a decimal centimetre value', () => {
+    expect(parseSwatchCm('72.5cm')).toBeCloseTo(72.5)
+  })
+
+  it('reads a bare number as centimetres', () => {
+    expect(parseSwatchCm('137')).toBe(137)
+  })
+
+  it('takes the first number for a non-square label (v1 assumes square)', () => {
     expect(parseSwatchCm('10x20')).toBe(10)
   })
 

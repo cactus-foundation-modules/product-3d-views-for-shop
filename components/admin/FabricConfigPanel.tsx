@@ -218,11 +218,26 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelSignature])
 
+  // Read the model on demand and SAY what happened: the button measures silently
+  // in the effect above, so a manual press that changed nothing on screen (the
+  // materials were already read on load) read as a dead button. Every press now
+  // reports the parts it found, an empty model, or the reason the file would not
+  // load - the last of which used to vanish into a swallowed catch.
   const detect = () => {
     setMeasuring(true)
+    setMessage(null)
     measureConfigured(faceModel, configuredIds, models)
-      .then(applyMeasurement)
-      .catch(() => {})
+      .then((m) => {
+        applyMeasurement(m)
+        setMessage(
+          m.names.length > 0
+            ? { kind: 'ok', text: `Read ${m.names.length} fabric ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` }
+            : { kind: 'err', text: 'That model has no named materials to texture. Re-export it with its materials named, then try again.' },
+        )
+      })
+      .catch((error) => {
+        setMessage({ kind: 'err', text: `Could not read the model: ${error instanceof Error ? error.message : 'the file could not be loaded'}.` })
+      })
       .finally(() => setMeasuring(false))
   }
 
@@ -403,6 +418,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           <button type="button" className="btn btn-secondary btn-sm" onClick={detect} disabled={measuring || !faceModel}>
             {measuring ? 'Reading model…' : 'Detect from model'}
           </button>
+          {!faceModel && <span className="p3d-fab-help">Set a default model above first.</span>}
+          {message && (
+            <p className={`p3d-fab-msg ${message.kind === 'ok' ? 'p3d-fab-msg-ok' : 'p3d-fab-msg-err'}`} style={{ margin: 0 }}>{message.text}</p>
+          )}
         </div>
         {materialNames.length === 0 && (
           <p className="p3d-fab-help">
