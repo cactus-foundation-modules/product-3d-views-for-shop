@@ -8,15 +8,15 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 // The rule, in the order the cases matter:
 //
 //  - A model on the product itself describes the product, so it always shows.
-//  - Models on variations are narrowed by the shopper's choice. Before a choice
-//    is made there is no way to know which is relevant, so all of them show and
-//    the shopper can look through them. Once a variation is chosen, only that
-//    one's model is right and the rest would be actively misleading - a shopper
-//    looking at the oak model having picked walnut.
-//  - Where the product has its own model AND a choice has not been made yet, the
-//    product's own stands in for the lot: it is the general answer to "what does
-//    this look like", and stacking every variation's model beside it just to be
-//    thorough would bury it.
+//  - Models on variations stay hidden until the shopper actually chooses that
+//    variation. Before a choice, the strip shows only what is attached to the
+//    product itself - the same rule the photo gallery already follows (a variant's
+//    own image only appears once that variant is picked). Splashing every
+//    variation's model up front is misleading: a shopper who has picked nothing is
+//    looking at oak, walnut and ash at once with no idea which they will get.
+//  - Once a variation is chosen, that one's model joins the product's own. The
+//    rest would be actively misleading - a shopper looking at the oak model having
+//    picked walnut.
 //  - Two variations sharing one file are one thumbnail, not two. Sites reuse the
 //    same model across a size run constantly (same shape, different dimensions),
 //    and the honest reading of two identical thumbnails is that something is
@@ -28,9 +28,7 @@ export function visibleItems(payload: P3dPayload, activeProductId: string | null
 
   const relevant = activeProductId
     ? variation.filter((i) => i.productId === activeProductId)
-    : own.length > 0
-      ? []
-      : variation
+    : []
 
   return dedupeByUrl([...own, ...relevant])
 }

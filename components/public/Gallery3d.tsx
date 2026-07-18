@@ -35,12 +35,14 @@ function configuratorModelKeys(payload: P3dPayload): Set<string> {
 // The strip's items when the configurator is on: one configurator thumbnail (drawn
 // from the default model so it shows the actual product), followed by any models
 // that are NOT part of the configurator, which still list on their own as before.
-// Without a fabric config this is exactly visibleItems, so the plain path is
-// untouched.
+// Without a fabric config, or before a variation is chosen, this is exactly
+// visibleItems - the configurator has nothing to re-texture until the shopper has
+// picked a variation, so its thumbnail stays off the strip rather than showing an
+// unconfigured guess.
 function thumbItems(payload: P3dPayload, activeProductId: string | null): P3dItem[] {
   const raw = visibleItems(payload, activeProductId)
   const fabric = payload.fabric
-  if (!fabric) return raw
+  if (!fabric || activeProductId === null) return raw
 
   const owned = configuratorModelKeys(payload)
   const others = raw.filter((i) => !owned.has(i.key))

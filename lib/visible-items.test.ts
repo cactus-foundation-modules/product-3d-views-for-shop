@@ -27,11 +27,12 @@ describe('visibleItems', () => {
     expect(keys(visibleItems(p, null))).toEqual(['a'])
   })
 
-  // The spec's first variation case: nothing on the product, models on the
-  // variations, no choice made yet.
-  it('shows every variation model while no variation is chosen', () => {
+  // Nothing on the product, models on the variations, no choice made yet: the
+  // strip stays empty until the shopper picks a variation, matching the photo
+  // gallery, which shows only the parent's own images until a variant is chosen.
+  it('shows no variation models while no variation is chosen', () => {
     const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
-    expect(keys(visibleItems(p, null))).toEqual(['oak', 'walnut'])
+    expect(visibleItems(p, null)).toEqual([])
   })
 
   // The spec's second: a choice narrows the strip to that variation alone.
@@ -46,19 +47,16 @@ describe('visibleItems', () => {
   })
 
   // "if lots of variations use the same 3d files, then don't duplicate the 3d
-  // file previews" - a size run sharing one model is one thumbnail.
-  it('collapses variations that share one file into a single thumbnail', () => {
-    const p = payload([
-      item('small', 'prod-small', '/chair.glb'),
-      item('medium', 'prod-medium', '/chair.glb'),
-      item('large', 'prod-large', '/chair.glb'),
-    ])
-    expect(keys(visibleItems(p, null))).toEqual(['small'])
+  // file previews" - a chosen variation carrying two rows on one file is one
+  // thumbnail, not two.
+  it('collapses two rows sharing one file into a single thumbnail', () => {
+    const p = payload([item('a', OAK, '/chair.glb'), item('b', OAK, '/chair.glb')])
+    expect(keys(visibleItems(p, OAK))).toEqual(['a'])
   })
 
   it('keeps distinct files distinct', () => {
-    const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
-    expect(visibleItems(p, null)).toHaveLength(2)
+    const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
+    expect(visibleItems(p, OAK)).toHaveLength(2)
   })
 
   it("lets the product's own model stand in while no variation is chosen", () => {
