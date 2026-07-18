@@ -73,7 +73,14 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
       if (cancelled) return
 
       const renderer = new WebGLRenderer({ canvas: canvas!, alpha: true, antialias: settings.antialias })
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, settings.pixelRatioCap))
+      // pixelRatioCap caps DOWNWARD (never above the device's own ratio);
+      // superSampling then multiplies UP, letting the viewer render above screen
+      // resolution and downsample. That is what tames the fabric-weave shimmer a
+      // 1x monitor otherwise shows when the model is small on screen - MSAA and
+      // anisotropy do not, since this is shaded-surface aliasing, not silhouette
+      // or grazing-angle. superSampling defaults to 1, so this stays identical to
+      // the old single line until the owner turns it up.
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, settings.pixelRatioCap) * settings.superSampling)
       // Everything from here to the dispose assignment builds on a live WebGL
       // context. A throw partway (addLights, frameModel, addShadowCatcher, or a
       // machine that loses its context) would otherwise leave that context open

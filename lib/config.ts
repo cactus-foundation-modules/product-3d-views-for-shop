@@ -101,6 +101,20 @@ export const P3dConfigSchema = z
     // it is lower. Above 2 a retina screen renders four times the pixels for a
     // difference nobody has ever picked out in a blind test.
     pixelRatioCap: z.number().min(1).max(3).default(2),
+    // Supersampling: a multiplier ON TOP of the device ratio, so the viewer can
+    // draw ABOVE the screen's own resolution and downsample. pixelRatioCap only
+    // caps downward (min against devicePixelRatio), so on a plain 1x monitor it
+    // can never add detail - the render is stuck at 1x and a fine fabric weave
+    // aliases to a choppy shimmer whenever the model is small on screen (zoomed
+    // out). MSAA (antialias) smooths the silhouette, not the shaded surface where
+    // the weave lives, so it does nothing for this; anisotropy fixes grazing-angle
+    // wash, a different failure. Rendering more samples per pixel and averaging
+    // them down is the actual cure. 1 is exactly today's behaviour - the model
+    // hardcoded no supersampling - so an install that upgrades looks unchanged
+    // until the owner reaches for it. The cost is quadratic (2x = 4x the pixels),
+    // which is why it is a dial and not just always on; capped at 2 so nobody can
+    // ask a phone GPU for 9x the fill and wonder why the viewer crawls.
+    superSampling: z.number().min(1).max(2).default(1),
     // The thumbnail strip's slow spin, which is what says "this one moves" before
     // anybody clicks it. Separate from autoRotate because the two answer different
     // questions: a site owner may well want the viewer still and the thumbnails

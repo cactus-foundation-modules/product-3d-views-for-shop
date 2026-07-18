@@ -346,6 +346,13 @@ export function Settings3dTab() {
             onChange={(v) => set('pixelRatioCap', v)}
             help="Caps how sharp the viewer draws on high-resolution screens. 2 is plenty."
           />
+          <SliderField
+            label="Fine-detail sharpening"
+            value={config.superSampling}
+            min={1} max={2} step={0.25}
+            onChange={(v) => set('superSampling', v)}
+            help="Turn up if fine fabrics or fine detail look grainy or choppy when zoomed out. Draws extra detail and smooths it down, at a real cost to speed - 2 draws four times the work, so nudge it up only as far as it needs to go."
+          />
         </div>
       </div>
     </div>
