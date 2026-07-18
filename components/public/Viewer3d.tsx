@@ -19,6 +19,38 @@ import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
 type Status = 'loading' | 'ready' | 'failed'
 
+// The view a shopper had when the last stage viewer was torn down: camera framing,
+// the model's own turn (spin mode), and the touch latches. Captured in dispose and
+// re-applied by the next build, so choosing an option that swaps the model (a
+// headrest, a different base) does not snap the view back to the opening framing -
+// the shopper zoomed in on a corner stays on that corner while the model changes
+// under them. Module-scope, not a ref: a fabric product's stage remounts across the
+// painted/unpainted component boundary, which destroys any per-component state, and
+// there is only ever one stage viewer on screen at a time. frameModel normalises
+// every model into the same 2-unit box at the origin, which is what makes a camera
+// position from one model meaningful on another.
+type CarriedView = {
+  position: { x: number; y: number; z: number }
+  target: { x: number; y: number; z: number }
+  pivotY: number
+  touched: boolean
+  moved: boolean
+  // When it was captured. A carry is only honoured moments after the capture -
+  // the dispose-then-rebuild of an option change - so a client-side navigation
+  // to a different product minutes later opens at the opening framing, not
+  // wherever the last product happened to be left.
+  at: number
+}
+let carriedView: CarriedView | null = null
+
+// The carry, if it is fresh enough to be the other half of an option change. Not
+// consumed on read: a rapid flick through options can cancel a build before it
+// ever owns a disposer, and the next build still deserves the view.
+function takeCarriedView(): CarriedView | null {
+  if (carriedView && performance.now() - carriedView.at < 3000) return carriedView
+  return null
+}
+
 // The fabric configurator's paints for the model on the stage: which named
 // material to texture, with what and at what tile density. Optional - a viewer
 // with no `fabric` prop behaves exactly as it always has.
@@ -81,8 +113,15 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
     let dispose: (() => void) | null = null
     let disposeShadow: (() => void) | null = null
     setStatus('loading')
-    setTouched(false)
-    setMoved(false)
+    // Read here, synchronously after the previous viewer's dispose captured it -
+    // the model load inside build() can take seconds, and the freshness window is
+    // about the dispose-to-rebuild gap, not the download.
+    const carried = takeCarriedView()
+    // A carried view carries its latches too: the shopper who dragged the old model
+    // has still dragged (no re-showing the hint), and a view away from its opening
+    // framing still deserves the Reset button.
+    setTouched(carried?.touched ?? false)
+    setMoved(carried?.moved ?? false)
 
     async function build(): Promise<void> {
       const three = await import('three')
@@ -205,6 +244,19 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         controls.minDistance = settings.minDistance
         controls.maxDistance = settings.maxDistance
 
+        // Re-apply the view the previous model was torn down under, AFTER the
+        // controls are constructed: OrbitControls saved the default framing above,
+        // so Reset view still means the opening view, not the carried one. The
+        // next controls.update() clamps the carried distance into this build's
+        // own min/max, so a settings change between builds cannot strand the
+        // camera out of bounds.
+        if (carried) {
+          camera.position.set(carried.position.x, carried.position.y, carried.position.z)
+          controls.target.set(carried.target.x, carried.target.y, carried.target.z)
+          pivot.rotation.y = carried.pivotY
+          controls.update()
+        }
+
         // Two kinds of viewer, picked by spinModel. Off (the historic default): the
         // camera does everything - auto-rotate orbits it, and a drag swings it round
         // a still model. On: the MODEL is the thing that turns, idle or dragged,
@@ -229,18 +281,28 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // shopper's own hand, and motion they cause is theirs to cause.
         const wantsMotion =
           settings.autoRotate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-        controls.autoRotate = wantsMotion && !spinMode
+        // A shopper who took hold of the previous model has taken hold of this one
+        // too: an option change swapping the model must not restart the idle turn
+        // they already stopped.
+        controls.autoRotate = wantsMotion && !spinMode && !carried?.touched
         controls.autoRotateSpeed = settings.autoRotateSpeed
         // Per-frame turn for the model-spin path, matched to OrbitControls' own
         // auto-rotation step so both modes read at the same speed for a given
         // autoRotateSpeed.
         const spinStep = ((2 * Math.PI) / 60 / 60) * settings.autoRotateSpeed
-        let idleSpin = wantsMotion && spinMode
+        let idleSpin = wantsMotion && spinMode && !carried?.touched
+        // Plain booleans shadowing the touched/moved state, because dispose() below
+        // captures the view for the NEXT build and React state read from this
+        // closure would be frozen at its mount-time value.
+        let latchTouched = carried?.touched ?? false
+        let latchMoved = carried?.moved ?? false
         controls.addEventListener('start', () => {
           // A touch stops the idle motion, whichever mode it was - only Reset
           // view brings it back, and it is the shopper asking for it by name.
           controls.autoRotate = false
           idleSpin = false
+          latchTouched = true
+          latchMoved = true
           setTouched(true)
           setMoved(true)
         })
@@ -261,6 +323,8 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           // neither jiggles the spin.
           if (!e.isPrimary || e.button !== 0) { dragPointer = null; return }
           idleSpin = false
+          latchTouched = true
+          latchMoved = true
           setTouched(true)
           setMoved(true)
           dragPointer = e.pointerId
@@ -313,6 +377,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           spinVelocity = 0
           controls.autoRotate = wantsMotion && !spinMode
           idleSpin = wantsMotion && spinMode
+          latchMoved = false
           setMoved(false)
         }
 
@@ -367,6 +432,18 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         setStatus('ready')
 
         dispose = () => {
+          // Captured first, while the camera, target and pivot still hold the view
+          // the shopper was looking at. The next build (same component on a model
+          // swap, or a fresh mount across the painted/unpainted boundary) picks it
+          // up, so the viewing angle and zoom survive an option change.
+          carriedView = {
+            position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+            target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+            pivotY: pivot.rotation.y,
+            touched: latchTouched,
+            moved: latchMoved,
+            at: performance.now(),
+          }
           if (frame !== null) cancelAnimationFrame(frame)
           // The mixer holds bindings to this model's nodes and three caches them
           // per root, so a shopper flicking between variations would otherwise
