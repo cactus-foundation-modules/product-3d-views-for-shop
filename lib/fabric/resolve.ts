@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db/prisma'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
-import { MANUAL_SIZE_ID } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -124,6 +124,15 @@ export function composeFabricBundle(
 
   const slots = config.slots
     .map((slot) => {
+      // A fixed colour is settled here and goes no further: there is no swatch to
+      // fetch, no size to read and nothing to tile, so the part is painted flat and
+      // the whole scale derivation below is skipped. A colour that will not parse
+      // leaves the part alone rather than painting it some guessed shade.
+      if (slot.colourOptionId === MANUAL_COLOUR_ID) {
+        const colour = parseHexColour(slot.colourManual)
+        if (!colour) return null
+        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
+      }
       const choice = selected.find((s) => s.optionId === slot.colourOptionId)
       const textureUrl = choice?.swatch ?? ''
       if (!isHttpUrl(textureUrl)) return null
@@ -137,7 +146,7 @@ export function composeFabricBundle(
           : sizes.find((z) => z.attributeId === slot.sizeAttributeId)?.label ?? ''
       const swatchCm = parseSwatchCm(sizeLabel)
       const repeat = tileRepeat({ heightCm, modelHeightUnits, texelDensity: slot.texelDensity, swatchCm })
-      return { materialName: slot.materialName, textureUrl, repeat }
+      return { materialName: slot.materialName, textureUrl, colour: null, repeat, rotationDeg: slot.rotationDeg }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
 

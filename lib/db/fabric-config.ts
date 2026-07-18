@@ -16,8 +16,21 @@ const FabricSlotSchema = z.object({
   // The exact glTF material name on the model, e.g. "Fabric seat". This is the
   // contract between the config and the file: the material name, not a mesh index.
   materialName: z.string(),
-  // svr_options id whose selected value's swatch gives this slot's texture url.
+  // svr_options id whose selected value's swatch gives this slot's texture url, or
+  // MANUAL_COLOUR_ID when the part is painted the fixed colour in `colourManual`.
   colourOptionId: z.string(),
+  // The hand-typed colour, used only when colourOptionId is MANUAL_COLOUR_ID.
+  // Stored as written and normalised at read time (parseHexColour), so a stored
+  // "#ABC" and "aabbcc" both resolve; anything that is not a colour leaves the part
+  // unpainted rather than guessed at.
+  colourManual: z.string().default(''),
+  // How far to turn this part's texture on the model, in degrees clockwise, about
+  // the middle of its tile. The grain of a veneer, the weave of a cane panel and the
+  // brush of a metal are all directional, and one exported model often carries UVs
+  // laid out the wrong way round on a single part - which, before this, meant going
+  // back to the modeller. Added to whatever rotation the model's own map already
+  // carried. Ignored by a part painted a flat colour, which has no direction.
+  rotationDeg: z.number().default(0),
   // pat_attributes id whose value gives the real-world swatch size for tiling, or
   // MANUAL_SIZE_ID when the size is typed by hand into `sizeManual` below.
   sizeAttributeId: z.string(),

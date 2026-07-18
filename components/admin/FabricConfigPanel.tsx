@@ -19,9 +19,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { MANUAL_SIZE_ID } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
-import type { FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { FabricBundle, FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
@@ -98,6 +98,11 @@ const css = `
 .p3d-fab-select{padding:.375rem .5rem;border:1px solid var(--color-border);border-radius:6px;
   background:var(--color-bg);color:var(--color-text);font-size:.8125rem;font-family:inherit;min-width:150px}
 .p3d-fab-when{font-size:.8125rem;color:var(--color-text-muted);display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.p3d-fab-colour{display:flex;gap:.375rem;align-items:center}
+.p3d-fab-swatch{width:2.25rem;height:2rem;padding:2px;border:1px solid var(--color-border);border-radius:6px;
+  background:var(--color-bg);cursor:pointer;flex:none}
+.p3d-fab-hex{min-width:7rem}
+.p3d-fab-num{min-width:5.5rem}
 .p3d-fab-spacer{flex:1}
 .p3d-fab-tag{font-size:.6875rem;padding:2px 6px;border-radius:4px;white-space:nowrap}
 .p3d-fab-tag-ok{background:var(--color-bg-subtle);color:var(--color-text-secondary);border:1px solid var(--color-border)}
@@ -253,11 +258,15 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         ...c.slots,
         {
           materialName: name,
-          colourOptionId: colour?.id ?? options[0]?.id ?? '',
+          // With no variation options at all to point at, a fixed colour is the only
+          // route there is, so a new part lands there rather than on an empty dropdown.
+          colourOptionId: colour?.id ?? options[0]?.id ?? MANUAL_COLOUR_ID,
+          colourManual: '',
           // With no attributes on the site at all, hand-typed is the only route there
           // is, so a new part starts there rather than on an empty dropdown.
           sizeAttributeId: size?.id ?? attributes[0]?.id ?? MANUAL_SIZE_ID,
           sizeManual: '',
+          rotationDeg: 0,
           // Measured on save from `densities`; 0 until then.
           texelDensity: 0,
         },
@@ -300,15 +309,21 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const previewSlots = useMemo(
     () =>
       config.slots
-        .map((slot) => {
+        .map((slot): FabricBundle['slots'][number] | null => {
+          // A fixed colour previews exactly as the storefront will paint it: there
+          // is no per-variation swatch involved, so this one is not a ballpark.
+          if (slot.colourOptionId === MANUAL_COLOUR_ID) {
+            const colour = parseHexColour(slot.colourManual)
+            return colour ? { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 } : null
+          }
           const opt = options.find((o) => o.id === slot.colourOptionId)
           const swatch = opt?.values.find((v) => v.swatch && /^https?:\/\//.test(v.swatch))?.swatch
           if (!swatch) return null
           const density = densities[slot.materialName] ?? 0
           const repeat = density > 0 ? Math.min(50, Math.max(0.01, 1 / (density * 20))) : 1
-          return { materialName: slot.materialName, textureUrl: swatch, repeat }
+          return { materialName: slot.materialName, textureUrl: swatch, colour: null, repeat, rotationDeg: slot.rotationDeg }
         })
-        .filter((s): s is { materialName: string; textureUrl: string; repeat: number } => s !== null),
+        .filter((s): s is FabricBundle['slots'][number] => s !== null),
     [config.slots, options, densities],
   )
 
@@ -334,7 +349,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           at the option that changes it. On the storefront the model shown is the one attached to the variation the
           shopper picks, painted with their chosen materials. The texture is scaled to true size automatically, from the
           swatch size and overall height you set per variation, or from a size you type in yourself for a finish that is
-          the same across the range - no fiddling with tile scale by hand.
+          the same across the range - no fiddling with tile scale by hand. A part the shopper does not get a say in -
+          a painted frame, a powder-coated leg - can be set to <strong>Manual</strong> and given one fixed colour instead,
+          and any part whose grain or weave came out of the modelling software lying the wrong way round can be turned
+          with <strong>Rotation</strong> rather than sent back for a re-export.
         </p>
       </div>
 
@@ -397,6 +415,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         )}
         {config.slots.map((slot, i) => {
           const measured = (densities[slot.materialName] ?? 0) > 0
+          // A part painted a fixed colour has no swatch and so nothing to scale or
+          // turn: its size, rotation and "measured" tag are all beside the point and
+          // would only invite the admin to fill in numbers that do nothing.
+          const manualColour = slot.colourOptionId === MANUAL_COLOUR_ID
+          const hex = parseHexColour(slot.colourManual)
           return (
             <div key={i} className="p3d-fab-row">
               <div className="p3d-fab-field">
@@ -415,21 +438,48 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   {options.map((o) => (
                     <option key={o.id} value={o.id}>{o.name}</option>
                   ))}
+                  <option value={MANUAL_COLOUR_ID}>Manual</option>
                 </select>
               </div>
-              <div className="p3d-fab-field">
-                <label className="p3d-fab-label">Size from</label>
-                <select className="p3d-fab-select" value={slot.sizeAttributeId} onChange={(e) => setSlot(i, { sizeAttributeId: e.target.value })}>
-                  <option value="">attribute…</option>
-                  {attributes.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                  <option value={MANUAL_SIZE_ID}>Manual</option>
-                </select>
-              </div>
+              {/* Manual: one fixed colour for this part, the same on every variation.
+                  The picker and the box are the same value from two directions - the
+                  picker for choosing one, the box for pasting a brand hex. */}
+              {manualColour && (
+                <div className="p3d-fab-field">
+                  <label className="p3d-fab-label">Colour</label>
+                  <div className="p3d-fab-colour">
+                    <input
+                      type="color"
+                      className="p3d-fab-swatch"
+                      aria-label={`Colour for ${slot.materialName || 'this part'}`}
+                      value={hex ?? '#cccccc'}
+                      onChange={(e) => setSlot(i, { colourManual: e.target.value })}
+                    />
+                    <input
+                      type="text"
+                      className="p3d-fab-select p3d-fab-hex"
+                      value={slot.colourManual}
+                      placeholder="#7a5c3a"
+                      onChange={(e) => setSlot(i, { colourManual: e.target.value })}
+                    />
+                  </div>
+                </div>
+              )}
+              {!manualColour && (
+                <div className="p3d-fab-field">
+                  <label className="p3d-fab-label">Size from</label>
+                  <select className="p3d-fab-select" value={slot.sizeAttributeId} onChange={(e) => setSlot(i, { sizeAttributeId: e.target.value })}>
+                    <option value="">attribute…</option>
+                    {attributes.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                    <option value={MANUAL_SIZE_ID}>Manual</option>
+                  </select>
+                </div>
+              )}
               {/* Manual: the size is typed here rather than read per variation. Same
                   parser either way, so "20cm", "200mm" and a bare "20" all read alike. */}
-              {slot.sizeAttributeId === MANUAL_SIZE_ID && (
+              {!manualColour && slot.sizeAttributeId === MANUAL_SIZE_ID && (
                 <div className="p3d-fab-field">
                   <label className="p3d-fab-label">Size</label>
                   <input
@@ -441,9 +491,31 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   />
                 </div>
               )}
-              <span className={`p3d-fab-tag ${measured ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
-                {measured ? 'texture scale measured' : 'not measured - use Detect'}
-              </span>
+              {/* Which way round the texture lies on this part. Degrees rather than a
+                  set of quarter turns, because a grain that runs at an angle across a
+                  moulded panel is not always a multiple of 90. */}
+              {!manualColour && (
+                <div className="p3d-fab-field">
+                  <label className="p3d-fab-label">Rotation</label>
+                  <input
+                    type="number"
+                    step={15}
+                    className="p3d-fab-select p3d-fab-num"
+                    value={slot.rotationDeg}
+                    placeholder="0"
+                    onChange={(e) => setSlot(i, { rotationDeg: Number.isFinite(e.target.valueAsNumber) ? e.target.valueAsNumber : 0 })}
+                  />
+                </div>
+              )}
+              {manualColour ? (
+                <span className={`p3d-fab-tag ${hex ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
+                  {hex ? 'fixed colour' : 'not a colour - use #rrggbb'}
+                </span>
+              ) : (
+                <span className={`p3d-fab-tag ${measured ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
+                  {measured ? 'texture scale measured' : 'not measured - use Detect'}
+                </span>
+              )}
               <span className="p3d-fab-spacer" />
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => removeSlot(i)}>Remove</button>
             </div>

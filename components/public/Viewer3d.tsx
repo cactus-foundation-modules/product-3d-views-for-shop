@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
-import type { P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
 type Status = 'loading' | 'ready' | 'failed'
@@ -22,7 +22,7 @@ type Status = 'loading' | 'ready' | 'failed'
 // The fabric configurator's paints for the model on the stage: which named
 // material to texture, with what and at what tile density. Optional - a viewer
 // with no `fabric` prop behaves exactly as it always has.
-type FabricPaints = { slots: Array<{ materialName: string; textureUrl: string; repeat: number }> }
+type FabricPaints = { slots: FabricBundle['slots'] }
 
 export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: P3dConfig; fabric?: FabricPaints }) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -418,7 +418,9 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // stamp the stale texture over it. Warming the cache first turns the
         // stamp itself near-synchronous, and the cancelled check between the two
         // stops the superseded run before it can touch the material.
-        await prefetchTexture(slot.textureUrl)
+        // A flat-colour slot has no texture to warm; the paint below is synchronous
+        // for it either way.
+        if (slot.textureUrl) await prefetchTexture(slot.textureUrl)
         if (cancelled) return
         const tex = await applyFabricPaint(model, slot)
         if (cancelled) { tex?.dispose(); continue }

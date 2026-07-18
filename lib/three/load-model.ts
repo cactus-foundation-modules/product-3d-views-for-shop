@@ -175,10 +175,12 @@ export async function prefetchTexture(url: string): Promise<void> {
 }
 
 /**
- * Paint one named material slot with an external texture at a given tile repeat.
- * Only the baseColor (`map`) is replaced; the material's normalMap, roughness and
- * the rest are left untouched, so the fabric keeps the model's own surface relief
- * and lighting response and only its colour and weave change.
+ * Paint one named material slot: either with an external texture at a given tile
+ * repeat and rotation, or - when the slot carries a flat `colour` - with that colour
+ * and no texture at all. Only the baseColor (`map`/`color`) is replaced; the
+ * material's normalMap, roughness and the rest are left untouched, so the surface
+ * keeps the model's own relief and lighting response and only its colour and weave
+ * change.
  *
  * Matches by the glTF material NAME, not a mesh index: that name is the contract
  * between a saved config and the file (see lib/db/fabric-config.ts). One glTF
@@ -192,10 +194,34 @@ export async function prefetchTexture(url: string): Promise<void> {
  */
 export async function applyFabricPaint(
   model: Object3D,
-  paint: { materialName: string; textureUrl: string; repeat: number },
+  paint: { materialName: string; textureUrl: string; colour?: string | null; repeat: number; rotationDeg?: number },
 ): Promise<Texture | null> {
   const three = await import('three')
+
+  // A flat colour has no texture to fetch, tile or turn. The material's baseColour
+  // MAP has to go with it: left in place it would multiply against the new colour
+  // and show the file's original weave tinted, rather than the plain finish the
+  // admin asked for. Nothing to return - there is no clone for the caller to own -
+  // and nothing to dispose here either, since the map that was dropped belongs to
+  // the model and disposeModel still frees it.
+  if (paint.colour) {
+    const colour = new three.Color(paint.colour)
+    model.traverse((child) => {
+      const mesh = child as Object3D & { material?: unknown }
+      const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+      for (const material of materials) {
+        const mat = material as { name?: string; map?: Texture | null; color?: { copy: (c: unknown) => void }; needsUpdate?: boolean }
+        if (mat.name !== paint.materialName) continue
+        mat.map = null
+        mat.color?.copy(colour)
+        mat.needsUpdate = true
+      }
+    })
+    return null
+  }
+
   const master = await loadTexture(paint.textureUrl)
+  const rotationRad = ((paint.rotationDeg ?? 0) * Math.PI) / 180
 
   const build = (existing: Texture | null | undefined): Texture => {
     const tex = master.clone()
@@ -227,6 +253,14 @@ export async function applyFabricPaint(
       tex.flipY = false
     }
     tex.repeat.set(paint.repeat, paint.repeat)
+    // The admin's turn, on top of whatever the model's own map already carried, and
+    // about the middle of the tile rather than its corner - a corner pivot slides the
+    // pattern off the part as well as turning it, which reads as a bug. Only touched
+    // when there is a turn to make, so a part left at 0 keeps the file's own centre.
+    if (rotationRad !== 0) {
+      tex.center.set(0.5, 0.5)
+      tex.rotation = (existing?.rotation ?? 0) + rotationRad
+    }
     return tex
   }
 

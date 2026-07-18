@@ -3,7 +3,7 @@ import { composeFabricBundle, parseSwatchCm, tileRepeat } from '@/modules/produc
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { MANUAL_SIZE_ID } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 
 // Ids kept short and named so a failing assertion reads on its own.
 const OPT_SEAT_COLOUR = 'opt-seat-colour'
@@ -19,6 +19,22 @@ const MODEL_NONE = 'model-none'
 const CRAB_URL = 'https://cdn.example.com/colours/quest-crab.webp'
 const TEAL_URL = 'https://cdn.example.com/colours/quest-teal.webp'
 
+// One slot with every field at its neutral value, so a test names only the field
+// it is actually about and a new field on the shape lands here rather than in a
+// dozen literals.
+function slot(overrides: Partial<FabricConfig['slots'][number]> = {}): FabricConfig['slots'][number] {
+  return {
+    materialName: 'Fabric seat',
+    colourOptionId: OPT_SEAT_COLOUR,
+    colourManual: '',
+    sizeAttributeId: ATTR_SEAT_SIZE,
+    sizeManual: '',
+    texelDensity: 1,
+    rotationDeg: 0,
+    ...overrides,
+  }
+}
+
 function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
   return {
     heightAttributeId: ATTR_HEIGHT,
@@ -28,8 +44,8 @@ function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
     // directly, so these are here only to satisfy the config shape.
     modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
     slots: [
-      { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: ATTR_SEAT_SIZE, sizeManual: '', texelDensity: 1 },
-      { materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE, sizeManual: '', texelDensity: 1 },
+      slot(),
+      slot({ materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE }),
     ],
     ...overrides,
   }
@@ -161,15 +177,13 @@ describe('composeFabricBundle', () => {
     )
     // Seat colour still applies; scale is neutral until the data is filled in. Back
     // has no colour chosen, so it is skipped entirely.
-    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, repeat: 1 }])
+    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0 }])
   })
 
   it('takes a hand-typed size for a slot set to Manual, ignoring the attributes', () => {
     const bundle = composeFabricBundle(
       config({
-        slots: [
-          { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '200mm', texelDensity: 1 },
-        ],
+        slots: [slot({ sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '200mm' })],
       }),
       MODEL_WITH_OBJ,
       100,
@@ -214,9 +228,7 @@ describe('composeFabricBundle', () => {
   it('leaves a Manual slot at repeat 1 when nothing has been typed yet', () => {
     const bundle = composeFabricBundle(
       config({
-        slots: [
-          { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '', texelDensity: 1 },
-        ],
+        slots: [slot({ sizeAttributeId: MANUAL_SIZE_ID })],
       }),
       MODEL_WITH_OBJ,
       100,
@@ -253,5 +265,79 @@ describe('composeFabricBundle', () => {
       [],
     )
     expect(bundle?.slots).toEqual([])
+  })
+
+  it('paints a Manual-colour slot flat, with no swatch, size or height involved', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ materialName: 'Frame', colourOptionId: MANUAL_COLOUR_ID, colourManual: '#7A5C3A' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      // No colour chosen for it, and no sizes at all - a fixed colour needs neither.
+      selected(),
+      [],
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Frame', textureUrl: '', colour: '#7a5c3a', repeat: 1, rotationDeg: 0 },
+    ])
+  })
+
+  it('accepts the short hex and a missing hash on a Manual colour', () => {
+    const bundle = composeFabricBundle(
+      config({
+        slots: [
+          slot({ materialName: 'Frame', colourOptionId: MANUAL_COLOUR_ID, colourManual: '#abc' }),
+          slot({ materialName: 'Leg', colourOptionId: MANUAL_COLOUR_ID, colourManual: 'FF0000' }),
+        ],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [],
+    )
+    expect(bundle?.slots.map((s) => s.colour)).toEqual(['#aabbcc', '#ff0000'])
+  })
+
+  it('skips a Manual-colour slot whose colour is blank or not a colour', () => {
+    const bundle = composeFabricBundle(
+      config({
+        slots: [
+          slot({ materialName: 'Frame', colourOptionId: MANUAL_COLOUR_ID, colourManual: '' }),
+          slot({ materialName: 'Leg', colourOptionId: MANUAL_COLOUR_ID, colourManual: 'oak' }),
+        ],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [],
+    )
+    expect(bundle?.slots).toEqual([])
+  })
+
+  it('carries the per-part rotation through to the viewer', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ rotationDeg: 90 })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }, { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' }],
+    )
+    expect(bundle?.slots[0]?.rotationDeg).toBe(90)
+    // The turn is the texture's business alone - it must not disturb the scale.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+})
+
+describe('parseHexColour', () => {
+  it('normalises every form an admin might paste', () => {
+    expect(parseHexColour('#7A5C3A')).toBe('#7a5c3a')
+    expect(parseHexColour('7a5c3a')).toBe('#7a5c3a')
+    expect(parseHexColour('  #abc  ')).toBe('#aabbcc')
+  })
+
+  it('refuses anything that is not a colour', () => {
+    expect(parseHexColour('')).toBeNull()
+    expect(parseHexColour('oak')).toBeNull()
+    expect(parseHexColour('#12345')).toBeNull()
+    expect(parseHexColour('#gggggg')).toBeNull()
   })
 })

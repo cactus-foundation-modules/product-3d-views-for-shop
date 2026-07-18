@@ -70,12 +70,21 @@ export type FabricBundle = {
   slots: Array<{
     // The exact glTF material name to paint on the model.
     materialName: string
-    // Public url of the fabric texture (the option value's swatch).
+    // Public url of the fabric texture (the option value's swatch). Empty for a part
+    // painted a flat colour, where `colour` carries the whole answer instead.
     textureUrl: string
+    // A flat `#rrggbb` for a part the admin has set to a fixed colour rather than
+    // pointing at an option, else null. Painting it replaces the material's baseColour
+    // texture outright, so the part reads as that colour and nothing else.
+    colour: string | null
     // Tile repeat, so the weave renders at true real-world scale. Derived server-side
     // from the model's real height, its measured geometry and the swatch size - see
     // tileRepeat in lib/fabric/resolve.ts.
     repeat: number
+    // Degrees clockwise to turn the texture about the middle of its tile, so a
+    // directional surface (grain, weave, brush) can be laid the right way round
+    // without re-exporting the model. 0 leaves the model's own UVs alone.
+    rotationDeg: number
   }>
 }
 
