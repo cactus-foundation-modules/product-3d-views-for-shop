@@ -28,7 +28,15 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [status, setStatus] = useState<Status>('loading')
+  // Two separate latches, because the hint and the reset button ask different
+  // questions. `touched` is "have they ever taken hold of this", and never goes
+  // back - the drag hint has made its point and re-showing it would nag someone
+  // who has already proved they know. `moved` is "is the view currently away
+  // from where it started", which a reset genuinely undoes: the model is back to
+  // its opening framing and turning again, so there is nothing left to reset and
+  // the button has no reason to be on screen.
   const [touched, setTouched] = useState(false)
+  const [moved, setMoved] = useState(false)
 
   // Kept across renders so the repaint effect below can find the built model and
   // its currently-applied fabric textures without rebuilding the whole viewer. The
@@ -70,6 +78,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
     let disposeShadow: (() => void) | null = null
     setStatus('loading')
     setTouched(false)
+    setMoved(false)
 
     async function build(): Promise<void> {
       const three = await import('three')
@@ -223,10 +232,12 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         const spinStep = ((2 * Math.PI) / 60 / 60) * settings.autoRotateSpeed
         let idleSpin = wantsMotion && spinMode
         controls.addEventListener('start', () => {
-          // First touch stops the idle motion for good, whichever mode it was.
+          // A touch stops the idle motion, whichever mode it was - only Reset
+          // view brings it back, and it is the shopper asking for it by name.
           controls.autoRotate = false
           idleSpin = false
           setTouched(true)
+          setMoved(true)
         })
 
         // The drag half of spin mode: horizontal pointer movement turns the pivot
@@ -246,6 +257,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           if (!e.isPrimary || e.button !== 0) { dragPointer = null; return }
           idleSpin = false
           setTouched(true)
+          setMoved(true)
           dragPointer = e.pointerId
           dragLastX = e.clientX
           spinVelocity = 0
@@ -270,26 +282,33 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           canvas!.addEventListener('pointercancel', onPointerEnd)
         }
 
-        // Puts the view back where it started. OrbitControls saved the camera's
-        // position and target when it was constructed - which is after the
-        // camera.position.set above, so its saved state IS the opening framing -
-        // and reset() restores both and clears the damping mid-flight, so a
-        // click during a glide does not fight the leftover motion. It fires
-        // 'change', not 'start', so it cannot trip the touched latch and bring
-        // the drag hint back.
+        // Puts the viewer back to how it opened - framing AND motion, since the
+        // opening view is a turning one and a model left dead still would only
+        // be half of what was asked for.
         //
-        // Auto-rotate deliberately stays off: it is killed for good on first
-        // touch, and a model that started turning again under a shopper who
-        // just asked for the view back would read as it running away from them.
+        // OrbitControls saved the camera's position and target when it was
+        // constructed - which is after the camera.position.set above, so its
+        // saved state IS the opening framing - and reset() restores both and
+        // clears the damping mid-flight, so a click during a glide does not
+        // fight the leftover motion. It fires 'change', not 'start', so it
+        // cannot trip the latches above and undo what we set here.
         //
         // In spin mode the model itself carries the turn, so the camera reset
         // alone would leave it facing wherever it was dragged to - the pivot and
         // any leftover flick velocity have to go back too. Both are no-ops in
         // camera-orbit mode, where nothing in the world ever moves.
+        //
+        // The idle turn resumes through the same wantsMotion the build opened
+        // with, so a shopper who asked their system for reduced motion still
+        // gets a still model back: reset means "how it was for me", not "how it
+        // was for someone else".
         resetRef.current = () => {
           controls.reset()
           pivot.rotation.y = 0
           spinVelocity = 0
+          controls.autoRotate = wantsMotion && !spinMode
+          idleSpin = wantsMotion && spinMode
+          setMoved(false)
         }
 
         // The stage is square-ish but sized by shop's layout, so the canvas follows
@@ -430,11 +449,12 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           dragged. Goes the moment they do it, having made its point. */}
       {status === 'ready' && !touched && <span className="p3d-hint">Drag to turn · scroll to zoom</span>}
       {/* The way back from a view the shopper has turned, zoomed or panned
-          themselves into and cannot easily undo by hand. Only once there is
-          something to reset: while loading or failed there is no camera behind
-          it. Sits above the hint, which is centred and can reach under it on a
-          narrow stage. */}
-      {status === 'ready' && (
+          themselves into and cannot easily undo by hand. It appears only once
+          they have actually moved something - on an untouched model it would be
+          offering to undo nothing - and goes again the moment it is used. Sits
+          above the hint, which is centred and can reach under it on a narrow
+          stage. */}
+      {status === 'ready' && moved && (
         <button type="button" className="p3d-reset" onClick={() => resetRef.current?.()}>
           Reset view
         </button>
