@@ -5,9 +5,6 @@ import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-v
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
 // Ids kept short and named so a failing assertion reads on its own.
-const OPT_HEADREST = 'opt-headrest'
-const VAL_NONE = 'val-none'
-const VAL_WITH = 'val-with'
 const OPT_SEAT_COLOUR = 'opt-seat-colour'
 const VAL_CRAB = 'val-crab'
 const OPT_BACK_COLOUR = 'opt-back-colour'
@@ -23,13 +20,10 @@ const TEAL_URL = 'https://cdn.example.com/colours/quest-teal.webp'
 
 function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
   return {
-    models: [
-      { modelId: MODEL_NONE, optionId: OPT_HEADREST, valueId: VAL_NONE },
-      { modelId: MODEL_WITH, optionId: OPT_HEADREST, valueId: VAL_WITH },
-    ],
-    defaultModelId: MODEL_WITH,
     heightAttributeId: ATTR_HEIGHT,
     // Each model's bounding-box height in its own units, as measured at config time.
+    // Read by the resolver by file url; composeFabricBundle takes the resolved number
+    // directly, so these are here only to satisfy the config shape.
     modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
     slots: [
       { materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: ATTR_SEAT_SIZE, texelDensity: 1 },
@@ -39,10 +33,9 @@ function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
   }
 }
 
-const models = new Map<string, { url: string; format: P3dFormat }>([
-  [MODEL_WITH, { url: 'https://cdn.example.com/chiro-with.glb', format: 'glb' }],
-  [MODEL_NONE, { url: 'https://cdn.example.com/chiro-none.glb', format: 'glb' }],
-])
+// The variation's own model, as the resolver hands it to composeFabricBundle.
+const MODEL_WITH_OBJ = { id: MODEL_WITH, url: 'https://cdn.example.com/chiro-with.glb', format: 'glb' as P3dFormat }
+const MODEL_NONE_OBJ = { id: MODEL_NONE, url: 'https://cdn.example.com/chiro-none.glb', format: 'glb' as P3dFormat }
 
 function selected(...values: SelectedOptionValue[]): SelectedOptionValue[] {
   return values
@@ -105,40 +98,23 @@ describe('tileRepeat', () => {
 })
 
 describe('composeFabricBundle', () => {
-  it('picks the model for the chosen structural option value', () => {
-    const withRest = composeFabricBundle(
-      config(),
-      selected({ optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null }),
-      [],
-      models,
-    )
-    expect(withRest?.modelId).toBe(MODEL_WITH)
-    expect(withRest?.modelUrl).toBe('https://cdn.example.com/chiro-with.glb')
-
-    const noRest = composeFabricBundle(
-      config(),
-      selected({ optionId: OPT_HEADREST, valueId: VAL_NONE, swatch: null }),
-      [],
-      models,
-    )
-    expect(noRest?.modelId).toBe(MODEL_NONE)
-  })
-
-  it('falls back to the default model when no models[] entry matches', () => {
-    const bundle = composeFabricBundle(config(), selected(), [], models)
+  it('draws the model it is handed', () => {
+    const bundle = composeFabricBundle(config(), MODEL_WITH_OBJ, 100, selected(), [])
     expect(bundle?.modelId).toBe(MODEL_WITH)
+    expect(bundle?.modelUrl).toBe('https://cdn.example.com/chiro-with.glb')
   })
 
-  it('returns null when the resolved model id is not in the lookup', () => {
-    const bundle = composeFabricBundle(config({ defaultModelId: 'missing', models: [] }), selected(), [], models)
+  it('returns null when the variation has no model to draw', () => {
+    const bundle = composeFabricBundle(config(), null, 0, selected(), [])
     expect(bundle).toBeNull()
   })
 
   it('maps each slot to its colour swatch and true-scale tile repeat', () => {
     const bundle = composeFabricBundle(
       config(),
+      MODEL_WITH_OBJ,
+      100,
       selected(
-        { optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null },
         { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
         { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: TEAL_URL },
       ),
@@ -147,9 +123,8 @@ describe('composeFabricBundle', () => {
         { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
         { attributeId: ATTR_BACK_SIZE, label: '10x10cm' },
       ],
-      models,
     )
-    // MODEL_WITH height-units 100. Seat: 200/(100*1*20) = 0.1; back 200/(100*1*10) = 0.2.
+    // Model height-units 100. Seat: 200/(100*1*20) = 0.1; back 200/(100*1*10) = 0.2.
     const slots = bundle?.slots ?? []
     expect(slots).toHaveLength(2)
     expect(slots[0]).toMatchObject({ materialName: 'Fabric seat', textureUrl: CRAB_URL })
@@ -158,20 +133,18 @@ describe('composeFabricBundle', () => {
     expect(slots[1]?.repeat).toBeCloseTo(0.2)
   })
 
-  it('uses the shown model height, so the headrest variant scales on its own file', () => {
+  it('scales on the shown model height, so each variation calibrates on its own file', () => {
     const bundle = composeFabricBundle(
       config(),
-      selected(
-        { optionId: OPT_HEADREST, valueId: VAL_NONE, swatch: null },
-        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
-      ),
+      MODEL_NONE_OBJ,
+      80,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
       [
         { attributeId: ATTR_HEIGHT, label: '160cm' },
         { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
       ],
-      models,
     )
-    // MODEL_NONE height-units 80: 160/(80*1*20) = 0.1, not the with-headrest 100.
+    // Model height-units 80: 160/(80*1*20) = 0.1, not the taller file's 100.
     expect(bundle?.modelId).toBe(MODEL_NONE)
     expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
   })
@@ -179,12 +152,10 @@ describe('composeFabricBundle', () => {
   it('leaves a slot at repeat 1 when the child has no size or height value', () => {
     const bundle = composeFabricBundle(
       config(),
-      selected(
-        { optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null },
-        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
-      ),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
       [], // no sizes and no height assigned
-      models,
     )
     // Seat colour still applies; scale is neutral until the data is filled in. Back
     // has no colour chosen, so it is skipped entirely.
@@ -193,16 +164,14 @@ describe('composeFabricBundle', () => {
 
   it('leaves a slot at repeat 1 when the model is not calibrated', () => {
     const bundle = composeFabricBundle(
-      config({ modelHeights: {} }), // never measured
-      selected(
-        { optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null },
-        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
-      ),
+      config(),
+      MODEL_WITH_OBJ,
+      0, // height never measured for this file
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
       [
         { attributeId: ATTR_HEIGHT, label: '200cm' },
         { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
       ],
-      models,
     )
     expect(bundle?.slots[0]?.repeat).toBe(1)
   })
@@ -210,14 +179,14 @@ describe('composeFabricBundle', () => {
   it('skips a slot whose colour has no usable texture url', () => {
     const bundle = composeFabricBundle(
       config(),
+      MODEL_WITH_OBJ,
+      100,
       selected(
-        { optionId: OPT_HEADREST, valueId: VAL_WITH, swatch: null },
         // A colour value with an empty swatch, and one with a non-http token.
         { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: '' },
         { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: '#ff0000' },
       ),
       [],
-      models,
     )
     expect(bundle?.slots).toEqual([])
   })

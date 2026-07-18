@@ -12,15 +12,6 @@ import { prisma } from '@/lib/db/prisma'
 // of calibration numbers - no hard link to shop-variations, so the row survives an
 // install that later removes it.
 
-const FabricModelSchema = z.object({
-  // A p3d_models row id: which attached model file to show...
-  modelId: z.string(),
-  // ...when this structural option value is the shopper's choice. optionId is an
-  // svr_options id (e.g. Headrest), valueId one of its svr_option_values.
-  optionId: z.string(),
-  valueId: z.string(),
-})
-
 const FabricSlotSchema = z.object({
   // The exact glTF material name on the model, e.g. "Fabric seat". This is the
   // contract between the config and the file: the material name, not a mesh index.
@@ -38,19 +29,16 @@ const FabricSlotSchema = z.object({
 })
 
 export const FabricConfigSchema = z.object({
-  models: z.array(FabricModelSchema).default([]),
-  // Shown when no full variant is resolved yet, or when the active child's
-  // structural option value matches no models[] entry.
-  defaultModelId: z.string().default(''),
   // pat_attributes id whose per-variation value gives the model's REAL overall
   // height in cm. That one real dimension pins the model's real-world scale (the
   // file carries geometry but not reliably its unit - mm vs metres), from which
   // every fabric surface's true size, and so its tile density, is derived.
   heightAttributeId: z.string().default(''),
-  // Each configured model's bounding-box height in its OWN units, measured from the
-  // mesh at config time. Keyed by p3d_models id. Paired with the real height above
-  // to get cm-per-model-unit. Kept per model because the with/without-headrest
-  // files differ in height.
+  // Each attached model's bounding-box height in its OWN units, measured from the
+  // mesh at config time. Keyed by p3d_models id, but the height belongs to the FILE
+  // (its url), so the resolver reads it by url - the same GLB attached to several
+  // variations has one height across all of them. Paired with the real height above
+  // to get cm-per-model-unit.
   modelHeights: z.record(z.string(), z.number()).default({}),
   slots: z.array(FabricSlotSchema).default([]),
 })

@@ -19,10 +19,9 @@ import type { FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
-type FabricModelRule = FabricConfig['models'][number]
 type FabricSlot = FabricConfig['slots'][number]
 
-const EMPTY: FabricConfig = { models: [], defaultModelId: '', heightAttributeId: '', modelHeights: {}, slots: [] }
+const EMPTY: FabricConfig = { heightAttributeId: '', modelHeights: {}, slots: [] }
 
 // Words that describe the KIND of thing rather than which part it is, dropped
 // before name-matching so "Fabric seat" pairs with "Seat Colour" on "seat" and not
@@ -135,12 +134,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       .then((data: { config: FabricConfig | null; options: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
         // The same GLB is attached once per variation, so the raw model list repeats
-        // each file dozens of times (one p3d_models row per variation). The
-        // configurator only ever textures ONE file, and the storefront resolves it by
-        // url all the same, so a saved id that lands on a non-representative row must
-        // be pulled back to its file's stand-in row - else its picker reads blank and
-        // its measured height is lost. Canonicalise every model id in the config to
-        // the first-seen row for its url before anything downstream reads it.
+        // each file dozens of times (one p3d_models row per variation). A model height
+        // is a fact about the FILE, and the storefront reads it by url, so a saved
+        // height key that lands on a non-representative row must be pulled back to its
+        // file's stand-in row - else its measured height is lost. Canonicalise every
+        // modelHeights key to the first-seen row for its url before anything reads it.
         const repByUrl = new Map<string, string>()
         for (const m of data.models) if (!repByUrl.has(m.url)) repByUrl.set(m.url, m.id)
         const canon = (id: string): string => {
@@ -150,8 +148,6 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         const raw = data.config ?? EMPTY
         const saved: FabricConfig = {
           ...raw,
-          defaultModelId: raw.defaultModelId ? canon(raw.defaultModelId) : raw.defaultModelId,
-          models: raw.models.map((r) => ({ ...r, modelId: r.modelId ? canon(r.modelId) : r.modelId })),
           modelHeights: Object.fromEntries(Object.entries(raw.modelHeights).map(([k, v]) => [canon(k), v])),
         }
         setConfig(saved)
@@ -178,21 +174,16 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     return [...byUrl.values()]
   }, [models])
 
-  // The model to read material names from and to preview against: the chosen
-  // default, or the first attached model as a stand-in before one is chosen.
-  const faceModel = useMemo(
-    () => distinctModels.find((m) => m.id === config.defaultModelId) ?? distinctModels[0],
-    [distinctModels, config.defaultModelId],
-  )
+  // The model to read material names from and to preview against: any attached model
+  // as a stand-in. Its fabric parts are assumed shared across the product's models -
+  // the storefront paints whichever model the chosen variation carries by the same
+  // named slots.
+  const faceModel = distinctModels[0]
 
-  // Every model the config actually uses - default plus each structural rule - whose
-  // height must be measured so its variants calibrate. Falls back to the face model
-  // so a not-yet-defaulted product still measures something.
-  const configuredIds = useMemo(() => {
-    const ids = [...new Set([config.defaultModelId, ...config.models.map((m) => m.modelId)].filter(Boolean))]
-    if (ids.length === 0 && faceModel) ids.push(faceModel.id)
-    return ids
-  }, [config.defaultModelId, config.models, faceModel])
+  // Every attached model's height is measured, so whichever one a variation carries
+  // calibrates on the storefront. Heights are keyed and read by file url downstream,
+  // so measuring each distinct file once is enough.
+  const configuredIds = useMemo(() => distinctModels.map((m) => m.id), [distinctModels])
 
   const modelSignature = JSON.stringify(configuredIds)
 
@@ -240,13 +231,6 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       })
       .finally(() => setMeasuring(false))
   }
-
-  const setModelRule = (i: number, patch: Partial<FabricModelRule>) =>
-    setConfig((c) => ({ ...c, models: c.models.map((m, idx) => (idx === i ? { ...m, ...patch } : m)) }))
-  const addModelRule = () =>
-    setConfig((c) => ({ ...c, models: [...c.models, { modelId: '', optionId: '', valueId: '' }] }))
-  const removeModelRule = (i: number) =>
-    setConfig((c) => ({ ...c, models: c.models.filter((_, idx) => idx !== i) }))
 
   const setSlot = (i: number, patch: Partial<FabricSlot>) =>
     setConfig((c) => ({ ...c, slots: c.slots.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) }))
@@ -334,67 +318,20 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       <div>
         <h4 className="p3d-fab-h">Fabric configurator</h4>
         <p className="p3d-fab-help">
-          Re-texture one model live from the shopper&rsquo;s choices instead of uploading a separate file per colour.
-          Point each fabric part of the model at the colour option that changes it. The weave is scaled to true size
-          automatically, from the swatch size and overall height you set per variation - no fiddling with tile scale by hand.
+          Re-texture the model live from the shopper&rsquo;s choices instead of uploading a separate file per colour.
+          Point each fabric part of the model at the colour option that changes it. On the storefront the model shown is
+          the one attached to the variation the shopper picks, painted with their chosen colours. The weave is scaled to
+          true size automatically, from the swatch size and overall height you set per variation - no fiddling with tile
+          scale by hand.
         </p>
       </div>
 
-      {/* Models: which file to show for a structural option like a headrest, plus the
-          height attribute that pins each model's real-world scale. */}
+      {/* Overall height: the one attribute that pins each model's real-world scale.
+          The model shown on the storefront is the variation's own attached file, so
+          there is nothing to pick here - only the height to calibrate against. */}
       <div className="p3d-fab-sec">
-        <p className="p3d-fab-sub">Models</p>
-        <p className="p3d-fab-help">
-          If an option swaps the shape itself - a headrest on or off - add a rule for each, pointing at the file that has it.
-          Colour and texture are handled below on one model; this is only for options that need a different file.
-        </p>
-        {config.models.map((rule, i) => {
-          const opt = options.find((o) => o.id === rule.optionId)
-          return (
-            <div key={i} className="p3d-fab-row">
-              <div className="p3d-fab-field">
-                <label className="p3d-fab-label">Model</label>
-                <select className="p3d-fab-select" value={rule.modelId} onChange={(e) => setModelRule(i, { modelId: e.target.value })}>
-                  <option value="">Choose a model…</option>
-                  {distinctModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.filename}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="p3d-fab-when">
-                <span>shown when</span>
-                <select className="p3d-fab-select" value={rule.optionId} onChange={(e) => setModelRule(i, { optionId: e.target.value, valueId: '' })}>
-                  <option value="">option…</option>
-                  {options.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
-                </select>
-                <span>=</span>
-                <select className="p3d-fab-select" value={rule.valueId} onChange={(e) => setModelRule(i, { valueId: e.target.value })} disabled={!opt}>
-                  <option value="">value…</option>
-                  {opt?.values.map((v) => (
-                    <option key={v.id} value={v.id}>{v.label}</option>
-                  ))}
-                </select>
-              </div>
-              <span className="p3d-fab-spacer" />
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => removeModelRule(i)}>Remove</button>
-            </div>
-          )
-        })}
-        <div className="p3d-fab-actions">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={addModelRule}>+ Add model rule</button>
-        </div>
+        <p className="p3d-fab-sub">Overall height</p>
         <div className="p3d-fab-row">
-          <div className="p3d-fab-field">
-            <label className="p3d-fab-label">Default model</label>
-            <select className="p3d-fab-select" value={config.defaultModelId} onChange={(e) => setConfig((c) => ({ ...c, defaultModelId: e.target.value }))}>
-              <option value="">Choose a model…</option>
-              {distinctModels.map((m) => (
-                <option key={m.id} value={m.id}>{m.filename}</option>
-              ))}
-            </select>
-          </div>
           <div className="p3d-fab-field">
             <label className="p3d-fab-label">Overall height from</label>
             <select className="p3d-fab-select" value={config.heightAttributeId} onChange={(e) => setConfig((c) => ({ ...c, heightAttributeId: e.target.value }))}>
@@ -406,7 +343,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           </div>
           <p className="p3d-fab-help" style={{ flex: 1, minWidth: '12rem' }}>
             The attribute holding the product&rsquo;s real overall height in cm, set per variation. It pins the model&rsquo;s
-            true size so the weave scales correctly. The configurator only appears once a default model is set.
+            true size so the weave scales correctly. The configurator lights up once at least one fabric part is set below.
           </p>
         </div>
       </div>
@@ -418,14 +355,14 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           <button type="button" className="btn btn-secondary btn-sm" onClick={detect} disabled={measuring || !faceModel}>
             {measuring ? 'Reading model…' : 'Detect from model'}
           </button>
-          {!faceModel && <span className="p3d-fab-help">Set a default model above first.</span>}
+          {!faceModel && <span className="p3d-fab-help">Attach a 3D model to this product first.</span>}
           {message && (
             <p className={`p3d-fab-msg ${message.kind === 'ok' ? 'p3d-fab-msg-ok' : 'p3d-fab-msg-err'}`} style={{ margin: 0 }}>{message.text}</p>
           )}
         </div>
         {materialNames.length === 0 && (
           <p className="p3d-fab-help">
-            No fabric parts read from the model yet. Set a default model above, then use <strong>Detect from model</strong>.
+            No fabric parts read from the model yet. Attach a 3D model to this product, then use <strong>Detect from model</strong>.
           </p>
         )}
         {config.slots.map((slot, i) => {

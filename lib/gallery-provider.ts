@@ -29,10 +29,11 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
     // Read only once we know there is a model to draw, and the settings are cached,
     // so a product page with no model never touches either table at all.
     const [settings, fabricConfig] = await Promise.all([getP3dConfigCached(), getFabricConfig(productId)])
-    // The configurator only lights up for a config that actually names a default
-    // model; an empty or half-finished row is treated as "not configured" and the
-    // gallery renders exactly as it did before, one thumbnail per model file.
-    const fabric = fabricConfig && fabricConfig.defaultModelId ? fabricConfig : null
+    // The configurator only lights up for a config that actually defines fabric
+    // parts to paint; an empty or half-finished row is treated as "not configured"
+    // and the gallery renders exactly as it did before, one thumbnail per model file
+    // with no live re-texturing.
+    const fabric = fabricConfig && fabricConfig.slots.length > 0 ? fabricConfig : null
     return {
       parentProductId: productId,
       settings,

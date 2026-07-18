@@ -51,10 +51,9 @@ export type P3dPayload = {
   settings: P3dConfig
   // The fabric configurator's config for this product, or null when the product is
   // not configured for it (the overwhelming majority). Present only when a saved
-  // p3d_fabric_configs row names a default model - see lib/gallery-provider.ts.
-  // When set, the gallery shows one "3D configurator" thumbnail that re-textures a
-  // single model live from the shopper's variation choices, rather than one
-  // thumbnail per model file.
+  // p3d_fabric_configs row defines fabric parts - see lib/gallery-provider.ts. When
+  // set, the variation's own model is re-textured live from the shopper's choices
+  // once a full combination is chosen; the thumbnails stay one per model file.
   fabric: FabricConfig | null
 }
 

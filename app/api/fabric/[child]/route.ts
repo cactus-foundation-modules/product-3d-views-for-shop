@@ -14,8 +14,8 @@ import { resolveFabricForChild } from '@/modules/product-3d-views-for-shop/lib/f
 // route has a concrete path; the query is the source of truth.
 //
 // A short public cache smooths the common case of a shopper flicking through
-// colours and back. On any error the answer is a plain null, so the stage falls
-// back to the default model rather than showing a broken viewer.
+// colours and back. On any error the answer is a plain null, so the stage shows the
+// model unpainted rather than a broken viewer.
 
 const CACHE_HEADERS = { 'Cache-Control': 'public, max-age=300' } as const
 
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const config = await getFabricConfig(parent)
     if (!config) return json(null)
 
-    const bundle = await resolveFabricForChild(child, config)
+    const bundle = await resolveFabricForChild(child, parent, config)
     return json(bundle)
   } catch (error) {
     console.error('[product-3d-views] fabric resolve failed:', error)

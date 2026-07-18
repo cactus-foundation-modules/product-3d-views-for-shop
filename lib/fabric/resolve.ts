@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/db/prisma'
-import { getModelById } from '@/modules/product-3d-views-for-shop/lib/db/models'
+import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -91,34 +91,30 @@ export type SelectedOptionValue = { optionId: string; valueId: string; swatch: s
 export type ChildSizeValue = { attributeId: string; label: string }
 
 /**
- * Compose the viewer bundle from a config and a child's resolved selections. Pure
- * and free of the database so the mapping - the fiddly part - is unit-testable on
- * its own: model selection, per-slot texture + tiling, and the fallbacks.
+ * Compose the viewer bundle for a resolved model and a child's selections. Pure and
+ * free of the database so the mapping - the fiddly part, per-slot texture + tiling -
+ * is unit-testable on its own.
  *
- * `models` is the caller's pre-resolved lookup of the model ids the config names,
- * so this function needs no database of its own.
+ * The model to draw is the caller's business: it is the variation's own attached
+ * model (see resolveFabricForChild), not something this function picks. `model` is
+ * that model, or null when the variation has none to draw, and `modelHeightUnits`
+ * is its measured bounding-box height in its own units (0 when uncalibrated).
  */
 export function composeFabricBundle(
   config: FabricConfig,
+  model: { id: string; url: string; format: P3dFormat } | null,
+  modelHeightUnits: number,
   selected: SelectedOptionValue[],
   sizes: ChildSizeValue[],
-  models: Map<string, { url: string; format: P3dFormat }>,
 ): FabricBundle | null {
-  // Model: the models[] entry whose (option, value) the child actually carries,
-  // else the default. That is how a structural option (Headrest) switches between
-  // whole model files rather than re-texturing one.
-  const matched = config.models.find((m) => selected.some((s) => s.optionId === m.optionId && s.valueId === m.valueId))
-  const modelId = matched?.modelId || config.defaultModelId
-  const model = modelId ? models.get(modelId) : undefined
   if (!model) return null
 
   // The shown model's real overall height (cm, per variation) and its height in the
   // model's own units (measured at config time). Together they give cm-per-model-unit,
   // which is what turns a swatch's real size into a true-scale tile repeat. Both are
-  // needed and model-specific; either absent leaves tiling uncalibrated (repeat 1).
+  // needed; either absent leaves tiling uncalibrated (repeat 1).
   const heightLabel = config.heightAttributeId ? sizes.find((z) => z.attributeId === config.heightAttributeId)?.label : undefined
   const heightCm = heightLabel ? parseSwatchCm(heightLabel) : null
-  const modelHeightUnits = config.modelHeights[modelId] ?? 0
 
   const slots = config.slots
     .map((slot) => {
@@ -132,7 +128,7 @@ export function composeFabricBundle(
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
 
-  return { modelId, modelUrl: model.url, format: model.format, slots }
+  return { modelId: model.id, modelUrl: model.url, format: model.format, slots }
 }
 
 /**
@@ -167,18 +163,20 @@ export function tileRepeat(input: {
 /**
  * Resolve a variant child to its fabric bundle, or null when it cannot be drawn.
  *
- * Keyed by the child product id because that is all shop's gallery contract hands
- * us (activeProductId) and because the size lives on the child. The joins are done
- * here, server-side, rather than asking shop to widen its contract to pass the
- * selected option-value ids.
+ * The model shown is the variation's OWN attached model, falling back to a model on
+ * the parent product when the variation has none of its own. Keyed by the child
+ * product id because that is what shop's gallery contract hands us (activeProductId)
+ * and because the size lives on the child; the parent id comes alongside so the
+ * fallback and the model-height lookup have the whole product tree to read.
  */
 export async function resolveFabricForChild(
   childProductId: string,
+  parentProductId: string,
   config: FabricConfig,
 ): Promise<FabricBundle | null> {
   // Without shop-variations there is no way to know which colours the child
-  // carries, so nothing to compose. The plain default model is the stage's job
-  // (see FabricStage), not this resolver's.
+  // carries, so nothing to compose. The plain model is the stage's job, not this
+  // resolver's.
   if (!(await hasVariationsTables())) return null
 
   const selected = await prisma.$queryRaw<{ optionId: string; valueId: string; swatch: string | null }[]>`
@@ -204,15 +202,34 @@ export async function resolveFabricForChild(
       `
     : []
 
-  // Only the model ids the config actually names are looked up, and each once.
-  const ids = [...new Set([config.defaultModelId, ...config.models.map((m) => m.modelId)].filter(Boolean))]
-  const models = new Map<string, { url: string; format: P3dFormat }>()
-  for (const id of ids) {
-    const model = await getModelById(id)
-    if (model) models.set(id, { url: model.url, format: model.format })
-  }
+  // The whole product tree in one read: the model to draw (the child's own, else the
+  // parent's) and the map that turns a config's model-height entry into a per-url
+  // fact both come from it.
+  const tree = await getModelsForProductTree(parentProductId)
+  const shown =
+    tree.find((m) => m.productId === childProductId) ??
+    tree.find((m) => m.productId === parentProductId)
+  if (!shown) return null
 
-  return composeFabricBundle(config, selected, sizes, models)
+  // modelHeights is keyed by p3d_models id, but the same GLB is attached once per
+  // variation (many rows, one url), so the shown child's row id is not the id the
+  // height was measured against. The height belongs to the FILE - resolve it by url,
+  // so whichever row is shown finds the height measured for its file.
+  const urlById = new Map(tree.map((m) => [m.id, m.url]))
+  const heightByUrl = new Map<string, number>()
+  for (const [id, height] of Object.entries(config.modelHeights)) {
+    const url = urlById.get(id)
+    if (url) heightByUrl.set(url, height)
+  }
+  const modelHeightUnits = heightByUrl.get(shown.url) ?? 0
+
+  return composeFabricBundle(
+    config,
+    { id: shown.id, url: shown.url, format: shown.format },
+    modelHeightUnits,
+    selected,
+    sizes,
+  )
 }
 
 // ---------------------------------------------------------------------------
