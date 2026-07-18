@@ -134,7 +134,26 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { config: FabricConfig | null; options: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
-        const saved = data.config ?? EMPTY
+        // The same GLB is attached once per variation, so the raw model list repeats
+        // each file dozens of times (one p3d_models row per variation). The
+        // configurator only ever textures ONE file, and the storefront resolves it by
+        // url all the same, so a saved id that lands on a non-representative row must
+        // be pulled back to its file's stand-in row - else its picker reads blank and
+        // its measured height is lost. Canonicalise every model id in the config to
+        // the first-seen row for its url before anything downstream reads it.
+        const repByUrl = new Map<string, string>()
+        for (const m of data.models) if (!repByUrl.has(m.url)) repByUrl.set(m.url, m.id)
+        const canon = (id: string): string => {
+          const m = data.models.find((x) => x.id === id)
+          return m ? repByUrl.get(m.url) ?? id : id
+        }
+        const raw = data.config ?? EMPTY
+        const saved: FabricConfig = {
+          ...raw,
+          defaultModelId: raw.defaultModelId ? canon(raw.defaultModelId) : raw.defaultModelId,
+          models: raw.models.map((r) => ({ ...r, modelId: r.modelId ? canon(r.modelId) : r.modelId })),
+          modelHeights: Object.fromEntries(Object.entries(raw.modelHeights).map(([k, v]) => [canon(k), v])),
+        }
         setConfig(saved)
         // Seed the densities from what was measured on the last save, so the panel
         // is usable before a re-detect and a save without one keeps them.
@@ -149,11 +168,21 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     return () => { cancelled = true }
   }, [productId])
 
+  // One entry per distinct model FILE for the pickers. The raw list carries a row
+  // per variation, so the same GLB repeats dozens of times; the configurator only
+  // ever names one file, so each url is offered once (its first-seen row as the
+  // id). Config ids were canonicalised to these same stand-in rows on load.
+  const distinctModels = useMemo(() => {
+    const byUrl = new Map<string, P3dAdminModel>()
+    for (const m of models) if (!byUrl.has(m.url)) byUrl.set(m.url, m)
+    return [...byUrl.values()]
+  }, [models])
+
   // The model to read material names from and to preview against: the chosen
   // default, or the first attached model as a stand-in before one is chosen.
   const faceModel = useMemo(
-    () => models.find((m) => m.id === config.defaultModelId) ?? models[0],
-    [models, config.defaultModelId],
+    () => distinctModels.find((m) => m.id === config.defaultModelId) ?? distinctModels[0],
+    [distinctModels, config.defaultModelId],
   )
 
   // Every model the config actually uses - default plus each structural rule - whose
@@ -312,7 +341,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                 <label className="p3d-fab-label">Model</label>
                 <select className="p3d-fab-select" value={rule.modelId} onChange={(e) => setModelRule(i, { modelId: e.target.value })}>
                   <option value="">Choose a model…</option>
-                  {models.map((m) => (
+                  {distinctModels.map((m) => (
                     <option key={m.id} value={m.id}>{m.filename}</option>
                   ))}
                 </select>
@@ -346,7 +375,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
             <label className="p3d-fab-label">Default model</label>
             <select className="p3d-fab-select" value={config.defaultModelId} onChange={(e) => setConfig((c) => ({ ...c, defaultModelId: e.target.value }))}>
               <option value="">Choose a model…</option>
-              {models.map((m) => (
+              {distinctModels.map((m) => (
                 <option key={m.id} value={m.id}>{m.filename}</option>
               ))}
             </select>
