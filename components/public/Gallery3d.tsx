@@ -110,7 +110,20 @@ function Thumb3d({ item, settings, active, thumbClass, thumbOnClass, onPick }: {
 
 export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
   const data = payload as P3dPayload
-  const items = visibleItems(data, activeProductId)
+
+  // Hold the last variation the shopper fully settled on. Mid-change - they've
+  // switched one option and not yet repicked the others - shop hands us a null
+  // activeProductId, since no whole combination resolves. Left to itself that
+  // pulls the chosen variation's model straight off the strip and hands the stage
+  // back to a photo, so a shopper reconfiguring watches the 3D view they were
+  // studying blink out on every partial step. Keep showing the last resolved
+  // variation's model through that gap; we only trade the remembered id for a new
+  // one once a full variation resolves again (activeProductId goes non-null).
+  const [lastResolved, setLastResolved] = useState<string | null>(activeProductId)
+  if (activeProductId !== null && activeProductId !== lastResolved) setLastResolved(activeProductId)
+  const effectiveProductId = activeProductId ?? lastResolved
+
+  const items = visibleItems(data, effectiveProductId)
 
   // The shopper had a model on the stage and then changed variation to one that
   // does not offer it. Hand the stage back rather than leaving it showing a model
