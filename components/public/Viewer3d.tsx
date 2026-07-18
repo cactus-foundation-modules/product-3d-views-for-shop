@@ -86,7 +86,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
 
     async function build(): Promise<void> {
       const three = await import('three')
-      const { Scene, PerspectiveCamera, WebGLRenderer, Color } = three
+      const { Scene, PerspectiveCamera, WebGLRenderer, Color, AnimationMixer, Clock } = three
       const { OrbitControls: Orbit } = await import('three/examples/jsm/controls/OrbitControls.js')
       const model = await loadModel(item.url, item.format)
       if (cancelled) return
@@ -330,8 +330,26 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         const observer = new ResizeObserver(resize)
         observer.observe(host!)
 
+        // A file that ships its own animation plays it on a loop - a desk with a
+        // pop-up socket demonstrating itself is the whole reason the shopper opened
+        // the viewer. This is the file's motion, not ours: nothing here knows what
+        // moves or how far, so a new animated product needs no code.
+        //
+        // Gated on the same wantsMotion as the idle turn, and for the same reason -
+        // but NOT on the touch latch that stops the turn. The spin stops on touch
+        // because it fights a shopper trying to look at one corner; the pop-up is
+        // the thing they are trying to look at, and stopping it mid-travel would
+        // freeze the model in a state the real product never sits in.
+        const mixer = wantsMotion && model.animations.length > 0 ? new AnimationMixer(model) : null
+        for (const clip of mixer ? model.animations : []) mixer!.clipAction(clip).play()
+        // Real elapsed time, not a per-frame constant: a dropped frame on a slow
+        // device should cost smoothness, not leave the socket travelling in slow
+        // motion against the clock the file was authored to.
+        const clock = mixer ? new Clock() : null
+
         const loop = (): void => {
           frame = requestAnimationFrame(loop)
+          if (mixer && clock) mixer.update(clock.getDelta())
           // The model-spin path: the idle turn, or the glide left over from a drag.
           // The light and the shadow-catcher plane are scene-level and never move,
           // so the live shadow map keeps the shadow anchored on the floor while its
@@ -350,6 +368,11 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
 
         dispose = () => {
           if (frame !== null) cancelAnimationFrame(frame)
+          // The mixer holds bindings to this model's nodes and three caches them
+          // per root, so a shopper flicking between variations would otherwise
+          // leave one live binding set per model behind the disposed geometry.
+          mixer?.stopAllAction()
+          mixer?.uncacheRoot(model)
           observer.disconnect()
           if (spinMode) {
             canvas!.removeEventListener('pointerdown', onPointerDown)
