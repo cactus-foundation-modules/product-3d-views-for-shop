@@ -36,6 +36,14 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
   // change must not tear down the WebGL context to swap one map.
   const modelRef = useRef<Object3D | null>(null)
   const builtUrlRef = useRef<string | null>(null)
+  // Mirrors builtUrlRef into state purely so the repaint effect re-runs the moment
+  // the model finishes building. The fabric fetch can land WHILE the model is still
+  // loading: the repaint effect fires then, finds no model yet and bails, and the
+  // build's own first paint used the empty slots it was handed at mount. Without a
+  // trigger tied to "model is now built", that mid-build paint is lost until the
+  // next colour change - which is exactly the "fabric only shows after I change an
+  // option" bug on the first, slow load of a model.
+  const [builtUrl, setBuiltUrl] = useState<string | null>(null)
   // materialName -> the clone this viewer currently has on that slot, so a swap can
   // dispose the outgoing one (its own per-viewer GPU allocation) without touching
   // the shared master in the texture cache.
@@ -113,6 +121,10 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // Reachable by the repaint effect only now the model is built and painted.
         modelRef.current = model
         builtUrlRef.current = item.url
+        // Wakes the repaint effect now the model exists, so a fabric fetch that
+        // landed mid-build (repaint fired, found no model, bailed) gets painted the
+        // moment building finishes rather than waiting for the next colour change.
+        if (!cancelled) setBuiltUrl(item.url)
 
         // Transparent lets the page's own background through (the default, and why
         // this suits every theme untold); a colour paints behind the model; the
@@ -250,12 +262,13 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
       }
     })()
     return () => { cancelled = true }
-    // Keyed on the paints' signature, not the model: item.url is read inside as a
+    // Keyed on the paints' signature AND builtUrl: item.url is read inside as a
     // guard, not a trigger, so a model change does not fire this (the build effect
-    // owns that). A fresh `fabric` object each render is why the string, not the
-    // object, is the dependency.
+    // owns that). builtUrl fires it once when the model finishes building, catching
+    // a fabric fetch that resolved mid-build. A fresh `fabric` object each render is
+    // why the signature string, not the object, is the dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fabricSignature])
+  }, [fabricSignature, builtUrl])
 
   return (
     <div className="p3d-stage" ref={hostRef}>
