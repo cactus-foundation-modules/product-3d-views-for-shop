@@ -271,12 +271,13 @@ export function Settings3dTab() {
             disabled={!config.autoRotate}
             onChange={(e) => set('spinModel', e.target.checked)}
           />
-          Spin the model itself, not the camera around it
+          Spin the model itself, and leave its shadow where it is
         </label>
         <p style={{ ...sectionNote, marginTop: '-0.5rem' }}>
-          Off, the view drifts around a model that stays put, so its shadow holds still. On, the model turns on
-          the spot under a fixed light, so the shadow moves with it like a real object on a turntable. Only
-          changes the slow idle spin - dragging by hand works the same either way.
+          Off, the view drifts around a model that stays put, and the shadow travels round with it. On, the
+          model turns on the spot while its shadow stays anchored to the floor beneath, which is what makes the
+          turning obvious. Needs shadows switched on above to be worth anything. Only changes the slow idle
+          spin - dragging by hand works the same either way.
         </p>
         <label style={checkboxRow}>
           <input type="checkbox" checked={config.enablePan} onChange={(e) => set('enablePan', e.target.checked)} />

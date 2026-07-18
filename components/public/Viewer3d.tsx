@@ -151,6 +151,23 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
             softness: settings.shadowSoftness,
             opacity: settings.shadowOpacity,
           })
+          // Freeze the shadow when the model is the thing that turns. A live shadow
+          // map re-projects the model's silhouette every frame, so a spinning model
+          // drags its shadow round with it and the two read as welded together -
+          // which is exactly what the camera-orbit mode already looked like, and why
+          // switching between the two appeared to change nothing at all. Baking the
+          // map once and never updating it pins the shadow to the floor, so the model
+          // visibly turns *within* its own shadow rather than carrying it along.
+          //
+          // autoUpdate false stops the per-frame render; needsUpdate true buys exactly
+          // one, which the first frame below spends (three clears the flag itself).
+          // Not physics - a real object's shadow does turn with it - but the whole
+          // point here is that the spin should be legible, and an anchored shadow is
+          // what makes it so. Cheaper too: no shadow-map pass per frame.
+          if (settings.spinModel) {
+            renderer.shadowMap.autoUpdate = false
+            renderer.shadowMap.needsUpdate = true
+          }
         }
 
         const camera = new PerspectiveCamera(settings.fieldOfView, 1, 0.1, 100)
@@ -174,9 +191,9 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         const wantsMotion =
           settings.autoRotate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
         // Two ways to satisfy "auto-rotate", picked by spinModel: orbit the camera
-        // around a still model (the historic default, shadow holds its place), or
-        // spin the model itself under a fixed light so the shadow sweeps with it.
-        // Only one is ever live at a time.
+        // around a still model (the historic default), or turn the model itself while
+        // the camera, the light and the now-frozen shadow all hold still. Only one is
+        // ever live at a time.
         controls.autoRotate = wantsMotion && !settings.spinModel
         controls.autoRotateSpeed = settings.autoRotateSpeed
         // Per-frame turn for the model-spin path, matched to OrbitControls' own
@@ -207,10 +224,9 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
 
         const loop = (): void => {
           frame = requestAnimationFrame(loop)
-          // Turn the model, not the camera: the light and shadow-catcher plane are
-          // scene-level, so the model spinning under them is what makes the shadow
-          // move. The shadow camera's reach is sized off the model's largest
-          // dimension, so a full turn stays within it.
+          // Turn the model, not the camera. The light and the shadow-catcher plane are
+          // scene-level and the shadow map is frozen above, so the shadow stays put on
+          // the floor while the model rotates above it.
           if (spinModel) pivot.rotation.y += spinStep
           controls.update()
           renderer.render(scene, camera)
