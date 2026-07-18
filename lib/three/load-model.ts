@@ -228,6 +228,17 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
   // handing the same instance to two scenes would have them fight over one
   // transform, so the thumbnail and the stage would drag each other around.
   //
+  // The copy is SkeletonUtils.clone, not Object3D.clone, and the difference is a
+  // rigged model rendering at all. Object3D.clone copies a SkinnedMesh but leaves
+  // its skeleton bound to the MASTER's bones - and a skinned mesh in 'attached'
+  // bind mode cancels its own world transform every frame and draws purely from
+  // its bones' world matrices. The master sits in the cache, never in a scene, so
+  // its bones never move: the clone ignored the pivot's idle turn, the drag, AND
+  // the mixer (which was animating the clone's own orphaned bone copies) - a
+  // bone-animated GLB arrived frozen solid while plain files spun happily.
+  // SkeletonUtils.clone is the same deep clone plus a rebind of each skinned mesh
+  // to its own cloned bones, and is a plain clone for models with no rig.
+  //
   // Materials get their own clones too, because Object3D.clone(true) SHARES them
   // by reference - and applyFabricPaint mutates material.map in place. Shared,
   // painting the stage viewer's seat painted the cached master and every
@@ -237,7 +248,8 @@ export async function loadModel(url: string, format: P3dFormat): Promise<Object3
   // are small CPU-side state, so cloning them is cheap; the textures they point
   // at stay shared, which is both the expensive part and the safe part (nothing
   // here mutates a texture in place - a paint swaps the reference).
-  const instance = (await entry).clone(true)
+  const { clone: cloneWithSkeleton } = await import('three/examples/jsm/utils/SkeletonUtils.js')
+  const instance = cloneWithSkeleton(await entry)
   instance.traverse((child) => {
     const mesh = child as Object3D & { material?: Material | Material[] }
     if (!mesh.material) return
