@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { deleteMedia } from '@/lib/media/upload'
 import type { MediaProviderType } from '@prisma/client'
@@ -15,6 +16,7 @@ type ModelRow = {
   mediaProvider: string | null
   mediaKey: string | null
   mediaId: string | null
+  ownsMedia: boolean
   filename: string
   format: string
   size: number
@@ -22,6 +24,15 @@ type ModelRow = {
 }
 
 const toModel = (r: ModelRow): P3dModel => ({ ...r, format: r.format as P3dFormat })
+
+// The column list every read shares, so a new column cannot reach one query and
+// miss another - which is how `ownsMedia` would have arrived undefined in
+// exactly the one place that decides whether to delete a file.
+const COLUMNS = Prisma.sql`
+  "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
+  "media_key" AS "mediaKey", "media_id" AS "mediaId", "owns_media" AS "ownsMedia",
+  "filename", "format", "size", "position"
+`
 
 // ---------------------------------------------------------------------------
 // Variations
@@ -116,9 +127,7 @@ export async function getTargets(productId: string): Promise<P3dTarget[]> {
 export async function getModelsForProductTree(productId: string): Promise<P3dModel[]> {
   const ids = [productId, ...(await getVariationLabels(productId)).keys()]
   const rows = await prisma.$queryRaw<ModelRow[]>`
-    SELECT "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
-           "media_key" AS "mediaKey", "media_id" AS "mediaId", "filename", "format",
-           "size", "position"
+    SELECT ${COLUMNS}
     FROM "p3d_models"
     WHERE "product_id" = ANY(${ids}::text[])
     ORDER BY "position", "created_at"
@@ -134,9 +143,7 @@ export async function getAdminModels(productId: string): Promise<P3dAdminModel[]
 
 export async function getModelById(id: string): Promise<P3dModel | null> {
   const rows = await prisma.$queryRaw<ModelRow[]>`
-    SELECT "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
-           "media_key" AS "mediaKey", "media_id" AS "mediaId", "filename", "format",
-           "size", "position"
+    SELECT ${COLUMNS}
     FROM "p3d_models"
     WHERE "id" = ${id}
   `
@@ -160,6 +167,12 @@ export async function createModel(input: {
   mediaProvider: string | null
   mediaKey: string | null
   mediaId: string | null
+  // Whether this row is what put the file in the library. An upload says true and
+  // keeps the right to tidy the bytes away later; a file picked from the library
+  // says false, because it was the owner's before this row existed. Defaults to
+  // false where a caller has no view: the cost of a wrong false is an orphaned
+  // blob, and of a wrong true, someone else's file.
+  ownsMedia?: boolean
   filename: string
   format: P3dFormat
   size: number
@@ -167,14 +180,14 @@ export async function createModel(input: {
   // Position appends within the target product, so a second model for a variation
   // lands after its first rather than fighting the parent's numbering.
   const rows = await prisma.$queryRaw<ModelRow[]>`
-    INSERT INTO "p3d_models" ("product_id", "url", "media_provider", "media_key", "media_id", "filename", "format", "size", "position")
+    INSERT INTO "p3d_models" ("product_id", "url", "media_provider", "media_key", "media_id", "owns_media", "filename", "format", "size", "position")
     VALUES (
       ${input.productId}, ${input.url}, ${input.mediaProvider}, ${input.mediaKey}, ${input.mediaId},
+      ${input.ownsMedia ?? false},
       ${input.filename}, ${input.format}, ${input.size},
       COALESCE((SELECT MAX("position") + 1 FROM "p3d_models" WHERE "product_id" = ${input.productId}), 0)
     )
-    RETURNING "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
-              "media_key" AS "mediaKey", "media_id" AS "mediaId", "filename", "format", "size", "position"
+    RETURNING ${COLUMNS}
   `
   const row = rows[0]
   if (!row) throw new Error('Failed to create 3D model row')
@@ -189,14 +202,39 @@ export async function deleteModel(id: string): Promise<void> {
 export async function getModelsForProducts(productIds: string[]): Promise<P3dModel[]> {
   if (productIds.length === 0) return []
   const rows = await prisma.$queryRaw<ModelRow[]>`
-    SELECT "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
-           "media_key" AS "mediaKey", "media_id" AS "mediaId", "filename", "format",
-           "size", "position"
+    SELECT ${COLUMNS}
     FROM "p3d_models"
     WHERE "product_id" = ANY(${productIds}::text[])
     ORDER BY "position", "created_at"
   `
   return rows.map(toModel)
+}
+
+/**
+ * True when some OTHER row still points at the same stored file as `model`.
+ *
+ * One file can hang off several rows. The picker exists so a model uploaded for
+ * the whole product can be attached to a variation as well, and that attach
+ * copies no bytes - it writes a second row beside the first, both naming the one
+ * object. The Google Sheet import does the same by url alone, with no media ids
+ * at all, so all three columns are asked: the library id where there is one, the
+ * storage key where there is one, and the url, which every row has.
+ *
+ * Called after our own row has gone, so it cannot count itself; the id guard is
+ * belt and braces.
+ */
+async function fileStillInUse(model: P3dModel): Promise<boolean> {
+  const rows = await prisma.$queryRaw<[{ n: bigint }]>`
+    SELECT COUNT(*)::bigint AS "n"
+    FROM "p3d_models"
+    WHERE "id" <> ${model.id}
+      AND (
+        ("media_id" IS NOT NULL AND "media_id" = ${model.mediaId})
+        OR ("media_key" IS NOT NULL AND "media_key" = ${model.mediaKey})
+        OR "url" = ${model.url}
+      )
+  `
+  return Number(rows[0]?.n ?? 0n) > 0
 }
 
 /**
@@ -206,9 +244,23 @@ export async function getModelsForProducts(productIds: string[]): Promise<P3dMod
  * and the Google Sheet import, which drops a model when its url leaves a variant's
  * cell. Tidying failures are logged, not thrown: the row is already gone, which is
  * what "deleted" means to the shop.
+ *
+ * Two things have to hold before any of that is ours to do, and neither used to
+ * be checked:
+ *
+ *   - Nothing else may point at the file. Attached to the product and to one of
+ *     its variations is two rows over one object, so removing either one deleted
+ *     the object out from under the other: the survivor kept its row, lost its
+ *     file, and showed as a broken model in the editor and a 404 on the shop.
+ *   - The file has to have been ours to begin with. A model picked from the
+ *     media library rather than uploaded here is the site owner's file, sitting
+ *     where they put it; removing the model is not permission to delete it.
  */
 export async function deleteModelCascade(model: P3dModel): Promise<void> {
   await deleteModel(model.id)
+  if (!model.ownsMedia) return
+  if (await fileStillInUse(model)) return
+
   if (model.mediaId) {
     await prisma.media.delete({ where: { id: model.mediaId } }).catch(() => {})
   }

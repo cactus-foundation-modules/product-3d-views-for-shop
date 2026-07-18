@@ -129,6 +129,9 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
       mediaProvider: provider,
       mediaKey: key,
       mediaId: record.id,
+      // These bytes arrived because of this row, so removing the row may take
+      // them away again.
+      ownsMedia: true,
       filename: filename || key.split('/').pop() || `model.${format}`,
       format,
       size: sizeBytes,
@@ -194,6 +197,10 @@ async function attachExisting(body: Record<string, unknown>, id: string) {
       mediaProvider: media.provider,
       mediaKey: media.key,
       mediaId: media.id,
+      // The file was in the library before this row was, and stays there after
+      // it goes. Nothing about attaching a model is permission to delete the
+      // site owner's own file.
+      ownsMedia: false,
       filename: media.originalName || media.key.split('/').pop() || `model.${format}`,
       format,
       size: media.sizeBytes,
@@ -277,6 +284,8 @@ async function uploadThroughServer(request: NextRequest, id: string, provider: P
       mediaProvider: provider,
       mediaKey: result.key,
       mediaId: record?.id ?? null,
+      // An upload, the long way round: still ours to tidy away later.
+      ownsMedia: true,
       filename: file.name,
       format,
       size: result.sizeBytes,

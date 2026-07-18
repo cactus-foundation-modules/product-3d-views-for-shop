@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS "p3d_models" (
     -- the product's 3d folder alongside the images. Nullable: a model whose
     -- library row has since been deleted is still perfectly renderable.
     "media_id" TEXT,
+    -- Whether this module put the file in the library and may therefore delete
+    -- it again. False for a file picked from the library, which was already the
+    -- owner's before we pointed at it. See 005_owns_media.sql.
+    "owns_media" BOOLEAN NOT NULL DEFAULT false,
     "filename" TEXT NOT NULL,
     -- Lower-case extension, and the only thing that decides which loader runs.
     -- Constrained to the four formats a browser can actually render: DWG is

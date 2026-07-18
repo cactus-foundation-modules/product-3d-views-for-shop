@@ -16,6 +16,10 @@ export type P3dModel = {
   mediaProvider: string | null
   mediaKey: string | null
   mediaId: string | null
+  // True when this module uploaded the file, and may therefore delete it when
+  // the model goes. False for a file chosen from the media library, which was
+  // the site owner's before we pointed at it and stays theirs afterwards.
+  ownsMedia: boolean
   filename: string
   format: P3dFormat
   size: number

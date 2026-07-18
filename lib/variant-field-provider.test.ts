@@ -37,7 +37,7 @@ import {
 const COL = '3D Files'
 const model = (productId: string, url: string): P3dModel => ({
   id: `m-${url}`, productId, url, mediaProvider: null, mediaKey: null, mediaId: null,
-  filename: url, format: 'glb', size: 0, position: 0,
+  ownsMedia: false, filename: url, format: 'glb', size: 0, position: 0,
 })
 
 beforeEach(() => {
