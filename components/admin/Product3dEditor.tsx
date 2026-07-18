@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { P3D_MAX_UPLOAD_MB, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { P3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
-import type { P3dAdminModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { FabricBundle, P3dAdminModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
@@ -329,6 +329,44 @@ function ViewerSettingsPanel({
   const previewModel = chosenModel ?? ownModels[0] ?? fallbackModel
   const showPicker = options.length > 0 && targets.length > 1
 
+  // A variation's model on a material-configured product carries no colours of its
+  // own: the shopper's chosen fabrics are painted on at view time, and drawing the
+  // file raw shows an unpainted shell rather than the product. So the preview asks
+  // the same public resolver the storefront does and paints the same way - without
+  // this, picking an option showed a model with nothing on it.
+  //
+  // Only a chosen combination is resolved. The parent's own model is what a shopper
+  // sees before choosing anything, which is to say unpainted, so there is nothing
+  // to ask. The chosen VARIATION is asked about even where it has no model row of
+  // its own, because the resolver falls back to the parent's model and paints that
+  // - exactly what the storefront shows for such a combination.
+  //
+  // The variation it was resolved for is kept beside it, so a bundle still in
+  // flight can never paint the previous combination's fabrics onto the new model,
+  // nor name the previous combination's file.
+  const previewChildId = chosenTarget?.productId ?? null
+  const [resolved, setResolved] = useState<{ childId: string; bundle: FabricBundle | null } | null>(null)
+  const bundle = resolved && resolved.childId === previewChildId ? resolved.bundle : null
+
+  useEffect(() => {
+    // Nothing to resolve for the parent's own model. The stale bundle is left
+    // where it is rather than cleared: the childId guard above already refuses to
+    // read it, and clearing it here would be a setState in the effect body for a
+    // value nobody can see.
+    if (!previewChildId) return
+    let cancelled = false
+    const childId = previewChildId
+    const url = `/api/m/product-3d-views-for-shop/fabric/${encodeURIComponent(previewChildId)}`
+      + `?parent=${encodeURIComponent(productId)}&child=${encodeURIComponent(previewChildId)}`
+    fetch(url)
+      .then((r) => (r.ok ? (r.json() as Promise<FabricBundle | null>) : null))
+      // A product with no material config resolves to null, and the model shows
+      // unpainted - which for that product is exactly right.
+      .then((data) => { if (!cancelled) setResolved({ childId, bundle: data }) })
+      .catch(() => { if (!cancelled) setResolved({ childId, bundle: null }) })
+    return () => { cancelled = true }
+  }, [productId, previewChildId])
+
   // The site's own lighting with this product's brightness dropped over the top,
   // which is precisely what a shopper on this product's page would get. Memoised
   // so the viewer is handed the same object between renders: a fresh one every
@@ -340,18 +378,30 @@ function ViewerSettingsPanel({
 
   // Stable across a drag: it keys the preview only by which model is on the
   // stage, so changing the brightness never remounts the viewer.
+  //
+  // The resolver has the last word on which file a combination draws where it
+  // answered: a size can swap the model out from under a colour, and the row this
+  // panel picked is only where the search started.
   const previewItem = useMemo(
     () =>
       previewModel
         ? {
             key: previewModel.id,
             productId: previewModel.productId,
-            url: previewModel.url,
-            format: previewModel.format,
-            label: `${formatLabel(previewModel.format)} preview`,
+            url: bundle?.modelUrl ?? previewModel.url,
+            format: bundle?.format ?? previewModel.format,
+            label: `${formatLabel(bundle?.format ?? previewModel.format)} preview`,
           }
         : null,
-    [previewModel],
+    [previewModel, bundle?.modelUrl, bundle?.format],
+  )
+
+  // Handed to the viewer only once the paints for THIS variation have landed.
+  // Passing empty slots meanwhile would tell the viewer there is nothing to paint,
+  // which is the unpainted shell the admin just reported as blank.
+  const previewFabric = useMemo(
+    () => (bundle && bundle.slots.length > 0 ? { slots: bundle.slots } : undefined),
+    [bundle],
   )
 
   if (!config || !site || !previewSettings || !previewItem || !previewModel) return null
@@ -418,13 +468,13 @@ function ViewerSettingsPanel({
             </div>
           )}
           <div className="p3d-ed-preview">
-            <Viewer3d item={previewItem} settings={previewSettings} />
+            <Viewer3d item={previewItem} settings={previewSettings} fabric={previewFabric} />
           </div>
           <p className="p3d-ed-help">
-            {previewModel.variationLabel
-              ? `Lit as a shopper would see it, on this product’s “${previewModel.variationLabel}” model. Drag to turn it.`
+            {(chosenTarget?.variationLabel ?? previewModel.variationLabel)
+              ? `Lit as a shopper would see it, on this product’s “${chosenTarget?.variationLabel ?? previewModel.variationLabel}” model. Drag to turn it.`
               : 'Lit as a shopper would see it, using the rest of your sitewide 3D settings. Drag to turn it.'}
-            {showPicker && !chosenModel && (
+            {showPicker && !chosenModel && !bundle && (
               chosenTarget
                 ? <> That combination has no 3D model of its own yet, so this is the product&rsquo;s.</>
                 : <> Pick a full set of options above to see a particular variation&rsquo;s model.</>
