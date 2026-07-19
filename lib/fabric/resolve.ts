@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
@@ -19,6 +20,7 @@ import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 let svrProbe: { value: boolean; at: number } | null = null
 let patProbe: { value: boolean; at: number } | null = null
 let helpingProbe: { value: boolean; at: number } | null = null
+let swatchSizeProbe: { value: boolean; at: number } | null = null
 const PROBE_TTL_MS = 30_000
 
 export async function hasVariationsTables(): Promise<boolean> {
@@ -81,6 +83,32 @@ export async function hasAttributeHelpings(): Promise<boolean> {
 }
 
 /**
+ * Whether the companion attributes module is new enough for a picture swatch to
+ * carry its own real-world size (its migration 007: `swatch_size` on an attribute
+ * value).
+ *
+ * That column is where a swatch's size now comes from: it sits beside the picture it
+ * describes rather than in a second attribute whose values happen to be labelled
+ * "20x20cm". Probed by column for the same reason as the helpings probe - this module
+ * pins no version of product-attributes-for-shop, and an install can be a deploy
+ * behind. Absent, every swatch reads as uncalibrated (repeat 1) unless the config
+ * still carries an older hand-typed or attribute-read size, which is exactly what
+ * such an install had before.
+ */
+export async function hasSwatchSizes(): Promise<boolean> {
+  if (swatchSizeProbe && Date.now() - swatchSizeProbe.at < PROBE_TTL_MS) return swatchSizeProbe.value
+  const rows = await prisma.$queryRaw<[{ present: boolean }]>`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'pat_attribute_values' AND column_name = 'swatch_size'
+    ) AS "present"
+  `
+  const value = Boolean(rows[0]?.present)
+  swatchSizeProbe = { value, at: Date.now() }
+  return value
+}
+
+/**
  * The real-world centimetres a size label describes: "20x20cm" -> 20, "137cm" ->
  * 137, "1070mm" -> 107. Takes the first number in the label, so it reads both a
  * square swatch size and an overall-height value; a non-square "10x20" reads as 10
@@ -130,7 +158,18 @@ export type SelectedOptionValue = { optionId: string; valueId: string; swatch: s
 // a product that uses the same attribute more than once ("Top material" and "Frame
 // material" both off one Material vocabulary). Null on a value written before
 // helpings existed, or by an older product-attributes install.
-export type ChildSizeValue = { attributeId: string; assignmentId?: string | null; label: string; swatch?: string | null }
+// `swatchSize` is the real-world size of that picture, recorded beside it on the
+// attribute value. It is where a fabric's tile scale comes from: the swatch and the
+// number describing it are one fact about one material, so pointing a part at the
+// material now settles its scale too. Null on a value with no size given, and on
+// every value read from a product-attributes install older than its migration 007.
+export type ChildSizeValue = {
+  attributeId: string
+  assignmentId?: string | null
+  label: string
+  swatch?: string | null
+  swatchSize?: string | null
+}
 
 /**
  * Whether a child's attribute value answers to the id a config points at.
@@ -191,9 +230,10 @@ export function composeFabricBundle(
       // Either route ends in one swatch url: a variation option's selected value, or
       // the value of an attribute set on this variation. Everything past this point
       // (scale, rotation) is the same for both.
+      const attributeValue = source.kind === 'attribute' ? sizes.find((z) => matchesSource(z, source.id)) : undefined
       const swatch =
         source.kind === 'attribute'
-          ? sizes.find((z) => matchesSource(z, source.id))?.swatch ?? ''
+          ? attributeValue?.swatch ?? ''
           : selected.find((s) => s.optionId === source.id)?.swatch ?? ''
       // Both modules store one visual per value in the same column: a media url for
       // a picture swatch, a hex colour for a plain colour one. A picture is a texture
@@ -205,14 +245,21 @@ export function composeFabricBundle(
         return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
       }
       const textureUrl = swatch
-      // A hand-typed size is a fact about the SURFACE, not about the variation, so
-      // it applies to every child alike - a laminate's repeat does not change with
-      // the seat colour. Read by the same parser as an attribute label, so the two
-      // routes behave identically from here on.
+      // The swatch's real size comes from the swatch itself: the attribute value that
+      // supplied the picture also carries how big the real material in it is. Nothing
+      // to point at and nothing to keep in step - a part painted from "Oak" is scaled
+      // by whatever size "Oak" was given.
+      //
+      // The `sizeAttributeId` fallback below is the older route, kept only so a config
+      // saved before swatches had sizes of their own goes on scaling as it did. Nothing
+      // writes it any more; a swatch with a size wins over it in every case.
       const sizeLabel =
-        slot.sizeAttributeId === MANUAL_SIZE_ID
+        attributeValue?.swatchSize?.trim() ||
+        (slot.sizeAttributeId === MANUAL_SIZE_ID
           ? slot.sizeManual
-          : sizes.find((z) => matchesSource(z, slot.sizeAttributeId))?.label ?? ''
+          : slot.sizeAttributeId
+            ? sizes.find((z) => matchesSource(z, slot.sizeAttributeId))?.label ?? ''
+            : '')
       const swatchCm = parseSwatchCm(sizeLabel)
       const repeat = tileRepeat({ heightCm, modelHeightUnits, texelDensity: slot.texelDensity, swatchCm })
       return { materialName: slot.materialName, textureUrl, colour: null, repeat, rotationDeg: slot.rotationDeg }
@@ -294,23 +341,27 @@ export async function resolveFabricForChild(
   // database happened to return first. Read only where the companion module is new
   // enough to have the column - on an older one every value comes back unattributed
   // and the config's bare attribute ids still match, which is what they always did.
-  const sizes: ChildSizeValue[] = !(await hasAttributeTables())
+  //
+  // The two optional columns are selected as a typed NULL where the companion module
+  // is too old to have them, rather than branching the whole query per combination:
+  // one statement, and the shape handed back is the same either way.
+  const hasAttributes = await hasAttributeTables()
+  const assignmentCol = hasAttributes && (await hasAttributeHelpings())
+    ? Prisma.sql`pv."assignment_id"`
+    : Prisma.sql`NULL::text`
+  const swatchSizeCol = hasAttributes && (await hasSwatchSizes())
+    ? Prisma.sql`av."swatch_size"`
+    : Prisma.sql`NULL::text`
+  const sizes: ChildSizeValue[] = !hasAttributes
     ? []
-    : (await hasAttributeHelpings())
-      ? await prisma.$queryRaw<ChildSizeValue[]>`
-          SELECT a."id" AS "attributeId", pv."assignment_id" AS "assignmentId", av."label", av."swatch"
-          FROM "pat_product_values" pv
-          JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
-          JOIN "pat_attributes" a ON a."id" = av."attribute_id"
-          WHERE pv."product_id" = ${childProductId}
-        `
-      : await prisma.$queryRaw<ChildSizeValue[]>`
-          SELECT a."id" AS "attributeId", av."label", av."swatch"
-          FROM "pat_product_values" pv
-          JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
-          JOIN "pat_attributes" a ON a."id" = av."attribute_id"
-          WHERE pv."product_id" = ${childProductId}
-        `
+    : await prisma.$queryRaw<ChildSizeValue[]>`
+        SELECT a."id" AS "attributeId", ${assignmentCol} AS "assignmentId",
+               av."label", av."swatch", ${swatchSizeCol} AS "swatchSize"
+        FROM "pat_product_values" pv
+        JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+        JOIN "pat_attributes" a ON a."id" = av."attribute_id"
+        WHERE pv."product_id" = ${childProductId}
+      `
 
   // The whole product tree in one read: the model to draw (the child's own, else the
   // parent's) and the map that turns a config's model-height entry into a per-url
@@ -380,11 +431,15 @@ export async function listColourOptions(productId: string): Promise<FabricColour
  * option, with its id already prefixed (see ATTRIBUTE_COLOUR_PREFIX), so the panel
  * and the preloader treat the two sources alike.
  *
- * Only attributes with at least one picture-swatch value are offered: an attribute
- * of plain words - a size, a warranty, a material NAME with no picture behind it -
- * has nothing to paint with, and listing it would only invite a slot that silently
- * renders nothing. Site-wide rather than per-product, because attribute values are
- * assigned to a variation rather than declared on the parent the way options are.
+ * Only PICTURE SWATCH attributes (control type IMAGE) with at least one value that
+ * actually carries a picture are offered. Two filters, not one: an attribute of plain
+ * words - a size, a warranty, a material NAME with no picture behind it - has nothing
+ * to paint with, and a colour-dot attribute has no swatch size to scale by, so a part
+ * pointed at either would silently render wrong or not at all. A fixed colour typed
+ * into the slot is the route for a part that is not a real material.
+ *
+ * Site-wide rather than per-product, because attribute values are assigned to a
+ * variation rather than declared on the parent the way options are.
  */
 export async function listColourAttributes(productId: string): Promise<FabricColourOption[]> {
   if (!(await hasAttributeTables())) return []
@@ -394,7 +449,7 @@ export async function listColourAttributes(productId: string): Promise<FabricCol
     SELECT a."id" AS "attributeId", av."id" AS "valueId", av."label", av."swatch"
     FROM "pat_attributes" a
     JOIN "pat_attribute_values" av ON av."attribute_id" = a."id"
-    WHERE av."swatch" IS NOT NULL AND av."swatch" <> ''
+    WHERE a."control_type" = 'IMAGE' AND av."swatch" IS NOT NULL AND av."swatch" <> ''
     ORDER BY a."name" ASC, av."position" ASC
   `
   const valuesByAttribute = new Map<string, FabricColourOption['values']>()

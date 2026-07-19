@@ -31,14 +31,17 @@ const FabricSlotSchema = z.object({
   // back to the modeller. Added to whatever rotation the model's own map already
   // carried. Ignored by a part painted a flat colour, which has no direction.
   rotationDeg: z.number().default(0),
-  // pat_attributes id whose value gives the real-world swatch size for tiling, or
-  // MANUAL_SIZE_ID when the size is typed by hand into `sizeManual` below.
-  sizeAttributeId: z.string(),
-  // The hand-typed swatch size, used only when sizeAttributeId is MANUAL_SIZE_ID.
-  // Read by the same parser as an attribute's label, so "20cm", "200mm" and a bare
-  // "20" all work. Not every surface has a per-variation size attribute behind it -
-  // a laminate or a veneer finish is often one fixed repeat across the whole range -
-  // and inventing an attribute per such surface is a lot of admin for one number.
+  // LEGACY, no longer written. A swatch's real-world size now lives on the attribute
+  // value beside the picture it describes (product-attributes' `swatch_size`), so the
+  // configurator has no size to ask about: pointing a part at a material settles its
+  // scale along with its colour. Both fields are kept, and still read as a fallback
+  // by the resolver, purely so a config saved before that keeps scaling as it did
+  // rather than dropping to repeat 1 on the next deploy.
+  //
+  // Optional with an empty default, since nothing puts them in a new config.
+  // sizeAttributeId held a pat_attributes id, or MANUAL_SIZE_ID for a size typed by
+  // hand into sizeManual.
+  sizeAttributeId: z.string().default(''),
   sizeManual: z.string().default(''),
   // This material's texel density, measured from the model in the browser at config
   // time (the server never parses a GLB): UV units per model-unit, i.e. how the

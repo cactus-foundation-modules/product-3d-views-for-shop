@@ -178,9 +178,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   }, [productId])
 
   // Both colour sources as one list, for everything that only needs to look a slot's
-  // stored id up: the preview, the name-guess when a part is added, the fallback when
-  // a product has no variation options of its own. The dropdown keeps them apart in
-  // two groups, because which one an admin is looking at matters when they pick.
+  // stored id up - the preview above all. Picture-swatch attributes are the only thing
+  // the dropdown offers now, but a config saved when variation options were on offer
+  // still points at one, and it goes on being painted; leaving those out here would
+  // blank the preview of a product that works perfectly well on the storefront.
   // Attribute ids arrive prefixed from the server, so the two can never collide.
   const colourSources = useMemo(
     () => [...variationOptions, ...colourAttributes],
@@ -262,22 +263,21 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const addSlot = () => {
     const used = new Set(config.slots.map((s) => s.materialName))
     const name = materialNames.find((n) => !used.has(n)) ?? materialNames[0] ?? ''
-    const colour = guessByName(name, colourSources, (o) => o.name)
-    const size = guessByName(name, attributes, (a) => a.name)
+    const colour = guessByName(name, colourAttributes, (o) => o.name)
     setConfig((c) => ({
       ...c,
       slots: [
         ...c.slots,
         {
           materialName: name,
-          // With nothing at all to point at - no variation options, no swatch-carrying
-          // attributes - a fixed colour is the only route there is, so a new part lands
-          // there rather than on an empty dropdown.
-          colourOptionId: colour?.id ?? colourSources[0]?.id ?? MANUAL_COLOUR_ID,
+          // With no picture-swatch attributes on the site at all, a fixed colour is the
+          // only route there is, so a new part lands there rather than on an empty
+          // dropdown.
+          colourOptionId: colour?.id ?? colourAttributes[0]?.id ?? MANUAL_COLOUR_ID,
           colourManual: '',
-          // With no attributes on the site at all, hand-typed is the only route there
-          // is, so a new part starts there rather than on an empty dropdown.
-          sizeAttributeId: size?.id ?? attributes[0]?.id ?? MANUAL_SIZE_ID,
+          // Legacy fields, kept empty: the swatch's size comes from the material it was
+          // picked from, not from anything set here. See lib/db/fabric-config.ts.
+          sizeAttributeId: '',
           sizeManual: '',
           rotationDeg: 0,
           // Measured on save from `densities`; 0 until then.
@@ -365,11 +365,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         <p className="p3d-fab-help">
           Re-texture the model live from the shopper&rsquo;s choices instead of uploading a separate file per finish.
           Point each material part of the model - upholstery, wood, laminate, metal, whatever the shopper gets to choose -
-          at the thing that changes it: one of the product&rsquo;s own variation options, or one of the site&rsquo;s
-          attributes, whichever your finishes are set up under. On the storefront the model shown is the one attached to the variation the
+          at the picture swatch attribute your finishes live under. On the storefront the model shown is the one attached to the variation the
           shopper picks, painted with their chosen materials. The texture is scaled to true size automatically, from the
-          swatch size and overall height you set per variation, or from a size you type in yourself for a finish that is
-          the same across the range - no fiddling with tile scale by hand. A part the shopper does not get a say in -
+          swatch size recorded against each picture swatch on the Attributes screen and the overall height below - no
+          fiddling with tile scale by hand. A swatch with no size set simply goes untiled until you give it one.
+          A part the shopper does not get a say in -
           a painted frame, a powder-coated leg - can be set to <strong>Manual</strong> and given one fixed colour instead,
           and any part whose grain or weave came out of the modelling software lying the wrong way round can be turned
           with <strong>Rotation</strong> rather than sent back for a re-export.
@@ -441,6 +441,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           // would only invite the admin to fill in numbers that do nothing.
           const manualColour = slot.colourOptionId === MANUAL_COLOUR_ID
           const hex = parseHexColour(slot.colourManual)
+          // A variation option this slot was pointed at before the dropdown narrowed to
+          // picture-swatch attributes. Offered back as its own entry so opening the
+          // panel does not quietly re-point a working product at something else; there
+          // is no way to pick one that is not already stored.
+          const legacySource = variationOptions.find((o) => o.id === slot.colourOptionId)
           return (
             <div key={i} className="p3d-fab-row">
               <div className="p3d-fab-field">
@@ -454,29 +459,23 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               </div>
               <div className="p3d-fab-field">
                 <label className="p3d-fab-label">Colour from</label>
-                {/* Two sources, kept visibly apart: the product's own variation
-                    options, and the attributes whose values carry a swatch. Which one
-                    a shop's finishes live in is a setup choice, not a rule, so both
-                    are on offer here. An attribute the product uses more than once is
-                    listed once per helping, under the name that helping goes by, so
-                    "Seat fabric" and "Back fabric" off one Fabric vocabulary are
-                    pickable apart rather than collapsing into one entry. */}
+                {/* Picture-swatch attributes only, plus a fixed colour. They are the
+                    only source that carries both halves of what a real material needs -
+                    the picture and the real-world size of it - so a part pointed at one
+                    is scaled as well as coloured, with nothing else to keep in step. An
+                    attribute the product uses more than once is listed once per helping,
+                    under the name that helping goes by, so "Seat fabric" and "Back
+                    fabric" off one Fabric vocabulary are pickable apart rather than
+                    collapsing into one entry.
+                    A config saved when variation options were on offer keeps whatever
+                    it points at - shown here as its stored entry so it is not silently
+                    re-pointed by opening this panel. */}
                 <select className="p3d-fab-select" value={slot.colourOptionId} onChange={(e) => setSlot(i, { colourOptionId: e.target.value })}>
-                  <option value="">option…</option>
-                  {variationOptions.length > 0 && (
-                    <optgroup label="Variation options">
-                      {variationOptions.map((o) => (
-                        <option key={o.id} value={o.id}>{o.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {colourAttributes.length > 0 && (
-                    <optgroup label="Attributes">
-                      {colourAttributes.map((o) => (
-                        <option key={o.id} value={o.id}>{o.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
+                  <option value="">material…</option>
+                  {colourAttributes.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                  {legacySource && <option value={slot.colourOptionId}>{legacySource.name} (variation option)</option>}
                   <option value={MANUAL_COLOUR_ID}>Manual</option>
                 </select>
               </div>
@@ -504,32 +503,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   </div>
                 </div>
               )}
-              {!manualColour && (
-                <div className="p3d-fab-field">
-                  <label className="p3d-fab-label">Size from</label>
-                  <select className="p3d-fab-select" value={slot.sizeAttributeId} onChange={(e) => setSlot(i, { sizeAttributeId: e.target.value })}>
-                    <option value="">attribute…</option>
-                    {attributes.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name}</option>
-                    ))}
-                    <option value={MANUAL_SIZE_ID}>Manual</option>
-                  </select>
-                </div>
-              )}
-              {/* Manual: the size is typed here rather than read per variation. Same
-                  parser either way, so "20cm", "200mm" and a bare "20" all read alike. */}
-              {!manualColour && slot.sizeAttributeId === MANUAL_SIZE_ID && (
-                <div className="p3d-fab-field">
-                  <label className="p3d-fab-label">Size</label>
-                  <input
-                    type="text"
-                    className="p3d-fab-select"
-                    value={slot.sizeManual}
-                    placeholder="e.g. 20cm"
-                    onChange={(e) => setSlot(i, { sizeManual: e.target.value })}
-                  />
-                </div>
-              )}
+              {/* No size field: the swatch's real-world size is set on the picture
+                  swatch itself, over on the Attributes screen, and travels with it. */}
               {/* Which way round the texture lies on this part. Degrees rather than a
                   set of quarter turns, because a grain that runs at an angle across a
                   moulded panel is not always a multiple of 90. */}

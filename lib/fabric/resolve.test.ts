@@ -310,6 +310,61 @@ describe('composeFabricBundle', () => {
     ])
   })
 
+  it('scales an attribute-painted part from the swatch size recorded on the value', () => {
+    const bundle = composeFabricBundle(
+      // No size pointed at at all - the swatch brings its own, which is the whole
+      // point of the field. 200cm real / (100 units * 1 density * 20cm swatch) = 0.1.
+      config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: '', sizeManual: '' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_FINISH, label: 'Oak', swatch: CRAB_URL, swatchSize: '20cm' },
+      ],
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+    ])
+  })
+
+  it('prefers the swatch own size over a size the config still points at', () => {
+    const bundle = composeFabricBundle(
+      // A config saved before swatches carried sizes: its hand-typed 40cm is ignored
+      // now the material itself says 20cm, so one edit on the attributes screen is
+      // the whole job. 200 / (100 * 1 * 20) = 0.1, not the 0.05 the 40cm would give.
+      config({
+        slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '40cm' })],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_FINISH, label: 'Oak', swatch: CRAB_URL, swatchSize: '20cm' },
+      ],
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(0.1)
+  })
+
+  it('leaves the tiling uncalibrated when the swatch has no size and the config names none', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: '', sizeManual: '' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        // A picture swatch whose real-world size was never filled in: the colour is
+        // still right, only the scale is neutral until somebody says how big it is.
+        { attributeId: ATTR_FINISH, label: 'Oak', swatch: CRAB_URL },
+      ],
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0 },
+    ])
+  })
+
   it('leaves an attribute-painted part alone when this variation carries no value for it', () => {
     const bundle = composeFabricBundle(
       config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH) })] }),
