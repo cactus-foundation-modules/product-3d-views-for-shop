@@ -69,6 +69,10 @@ export const FabricConfigSchema = z.object({
   // density, is derived. May hold MANUAL_SIZE_ID, in which case the size is the
   // hand-typed `heightManual` below instead.
   //
+  // May instead hold a shop-variations option id, prefixed (see OPTION_SIZE_PREFIX):
+  // shops that build variations out of a plain "Size" chooser have the measurement on
+  // the option's value and nowhere else. readSizeSource tells the three apart.
+  //
   // Still named for the height, since that is what it held for every config written
   // before width was an option and renaming a stored key buys nothing but a migration.
   heightAttributeId: z.string().default(''),

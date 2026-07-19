@@ -53,6 +53,42 @@ export function readColourSource(
 }
 
 /**
+ * The overall size can be read off a product ATTRIBUTE (product-attributes-for-shop,
+ * pat_attributes) or off a VARIATION OPTION (shop-variations, svr_options) - the
+ * latter because plenty of shops record the size a variation comes in as one of the
+ * choosers on the Variations screen rather than as an attribute, and a size the
+ * configurator cannot see is a model that never scales.
+ *
+ * The prefixing is the mirror image of the colour one, and for the same reason:
+ * whichever source came first keeps the bare id, so nothing saved before the second
+ * arrived needs migrating. Colour started on options, so an attribute is prefixed
+ * there; size started on attributes, so an option is prefixed here. Both ids are
+ * cuids out of different tables, so a stored value is never ambiguous.
+ */
+export const OPTION_SIZE_PREFIX = 'opt:'
+
+/** The stored id for a size taken from the variation option `id`. */
+export function optionSizeId(id: string): string {
+  return `${OPTION_SIZE_PREFIX}${id}`
+}
+
+/**
+ * What a stored `heightAttributeId` points at. One reader shared by the admin panel
+ * and the resolver, so the two can never disagree about whether an id is an
+ * attribute, a variation option, the hand-typed sentinel or nothing at all.
+ */
+export function readSizeSource(
+  heightAttributeId: string,
+): { kind: 'none' } | { kind: 'manual' } | { kind: 'option'; id: string } | { kind: 'attribute'; id: string } {
+  if (!heightAttributeId) return { kind: 'none' }
+  if (heightAttributeId === MANUAL_SIZE_ID) return { kind: 'manual' }
+  if (heightAttributeId.startsWith(OPTION_SIZE_PREFIX)) {
+    return { kind: 'option', id: heightAttributeId.slice(OPTION_SIZE_PREFIX.length) }
+  }
+  return { kind: 'attribute', id: heightAttributeId }
+}
+
+/**
  * A hex colour normalised to `#rrggbb`, or null when the text is not a colour at
  * all. Accepts a leading hash or not, and the three-digit short form, because an
  * admin pasting a brand colour out of a style guide gets any of those. Shared by

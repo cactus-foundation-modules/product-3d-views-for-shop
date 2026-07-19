@@ -200,6 +200,13 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     [variationOptions, colourAttributes],
   )
 
+  // The overall-size sources, split by the screen they were set up on. Anything not
+  // marked as a variation option is treated as an attribute, so an entry from a
+  // response that predates the split still appears rather than silently dropping out
+  // of the dropdown and blanking a working config.
+  const sizeAttributes = useMemo(() => attributes.filter((a) => a.source !== 'option'), [attributes])
+  const sizeOptions = useMemo(() => attributes.filter((a) => a.source === 'option'), [attributes])
+
   // One entry per distinct model FILE for the pickers. The raw list carries a row
   // per variation, so the same GLB repeats dozens of times; the configurator only
   // ever names one file, so each url is offered once (its first-seen row as the
@@ -420,10 +427,24 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           <div className="p3d-fab-field">
             <label className="p3d-fab-label">{axisLabel} from</label>
             <select className="p3d-fab-select" value={config.heightAttributeId} onChange={(e) => setConfig((c) => ({ ...c, heightAttributeId: e.target.value }))}>
-              <option value="">attribute…</option>
-              {attributes.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}</option>
-              ))}
+              <option value="">choose…</option>
+              {/* Grouped by which screen the source lives on. A shop often has a "Size"
+                  in both places, and two identically named entries in a flat list is a
+                  coin toss the admin has no way to call. */}
+              {sizeAttributes.length > 0 && (
+                <optgroup label="Attributes">
+                  {sizeAttributes.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {sizeOptions.length > 0 && (
+                <optgroup label="Variation options">
+                  {sizeOptions.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </optgroup>
+              )}
               <option value={MANUAL_SIZE_ID}>Manual</option>
             </select>
           </div>
@@ -445,9 +466,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           <p className="p3d-fab-help" style={{ flex: 1, minWidth: '12rem' }}>
             One real measurement of the product in cm, either its height or its width - whichever your variations
             actually differ by. It pins the model&rsquo;s true size so the texture scales correctly, and one is all it
-            takes, so there is no second box to keep in step. Point it at an attribute when that measurement changes
-            from one variation to the next, or choose <strong>Manual</strong> and type it once when they are all the
-            same. An attribute this product uses more than once appears once per copy, under the name you gave each.
+            takes, so there is no second box to keep in step. Point it at whatever already records that measurement -
+            an attribute, or one of the choosers on this product&rsquo;s Variations tab - when it changes from one
+            variation to the next, or choose <strong>Manual</strong> and type it once when they are all the same.
+            An attribute this product uses more than once appears once per copy, under the name you gave each.
             Width is read left-to-right as the model was exported, so a file lying on its side wants re-exporting
             rather than fudging. The configurator lights up once at least one material part is set below.
           </p>

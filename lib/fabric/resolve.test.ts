@@ -3,13 +3,17 @@ import { composeFabricBundle, parseSwatchCm, tileRepeat } from '@/modules/produc
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, attributeColourId, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, attributeColourId, optionSizeId, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 
 // Ids kept short and named so a failing assertion reads on its own.
 const OPT_SEAT_COLOUR = 'opt-seat-colour'
 const VAL_CRAB = 'val-crab'
 const OPT_BACK_COLOUR = 'opt-back-colour'
 const VAL_TEAL = 'val-teal'
+// A variation option carrying the product's overall size as its value label - the
+// shop that never set the measurement up as an attribute at all.
+const OPT_SIZE = 'opt-size'
+const VAL_140 = 'val-140'
 const ATTR_SEAT_SIZE = 'attr-seat-size'
 const ATTR_BACK_SIZE = 'attr-back-size'
 const ATTR_HEIGHT = 'attr-height'
@@ -231,6 +235,36 @@ describe('composeFabricBundle', () => {
     )
     // 2m is 200cm: 200/(100*1*20) = 0.1, not the attribute's 400cm -> 0.2.
     expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('reads the overall size off a variation option when the config points at one', () => {
+    const bundle = composeFabricBundle(
+      config({ heightAttributeId: optionSizeId(OPT_SIZE) }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(
+        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
+        { optionId: OPT_SIZE, valueId: VAL_140, swatch: null, label: '200cm' },
+      ),
+      [
+        // An attribute of the same id-shape the config must NOT fall back to.
+        { attributeId: ATTR_HEIGHT, label: '400cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    // 200/(100*1*20) = 0.1 - the option's label, not the height attribute's 400cm.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('leaves the scale uncalibrated when the size option is not one this variation carries', () => {
+    const bundle = composeFabricBundle(
+      config({ heightAttributeId: optionSizeId(OPT_SIZE) }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [{ attributeId: ATTR_SEAT_SIZE, label: '20x20cm' }],
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(1)
   })
 
   it('leaves every slot at repeat 1 when the manual height is blank', () => {

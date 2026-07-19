@@ -49,7 +49,23 @@ async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
     case 'glb':
     case 'gltf': {
       const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-      const gltf = await new GLTFLoader().loadAsync(url)
+      const loader = new GLTFLoader()
+      // EXT_meshopt_compression: a glTF extension a lot of export pipelines now turn
+      // on by default (gltfpack, and Blender's "Compression" tick), and one the loader
+      // refuses outright without a decoder - "setMeshoptDecoder must be called before
+      // loading compressed files", which reads to the admin as a broken upload rather
+      // than as a missing decoder. The decoder is three's own, bundled with it and
+      // carrying its wasm inline, so this fetches nothing extra at runtime and there
+      // is no decoder path to keep in step.
+      //
+      // Imported and awaited inside this branch rather than at module scope: it is
+      // ~24kB that only glTF needs, and only the compressed ones at that - but it must
+      // be ready BEFORE the parse, since the loader asks the decoder synchronously
+      // once it meets the extension.
+      const { MeshoptDecoder } = await import('three/examples/jsm/libs/meshopt_decoder.module.js')
+      await MeshoptDecoder.ready
+      loader.setMeshoptDecoder(MeshoptDecoder)
+      const gltf = await loader.loadAsync(url)
       // GLTFLoader hands the clips back BESIDE the scene, not on it, so returning
       // gltf.scene alone drops them and an animated file plays as a still. Parking
       // them on the scene's own `animations` is what makes them survive the clone

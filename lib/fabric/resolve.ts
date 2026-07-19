@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
-import { MANUAL_SIZE_ID, attributeColourId, parseHexColour, readColourSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_SIZE_ID, attributeColourId, optionSizeId, parseHexColour, readColourSource, readSizeSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -21,6 +21,7 @@ let svrProbe: { value: boolean; at: number } | null = null
 let patProbe: { value: boolean; at: number } | null = null
 let helpingProbe: { value: boolean; at: number } | null = null
 let swatchSizeProbe: { value: boolean; at: number } | null = null
+let optionSourceProbe: { value: boolean; at: number } | null = null
 const PROBE_TTL_MS = 30_000
 
 export async function hasVariationsTables(): Promise<boolean> {
@@ -109,6 +110,25 @@ export async function hasSwatchSizes(): Promise<boolean> {
 }
 
 /**
+ * Whether shop-variations is new enough to record where an option was built from
+ * (its migration 004). Only used to spot an option that is really an attribute in
+ * disguise, so an install without the columns simply offers both - the same list it
+ * would get anyway, since a shop that old has no bridged options to duplicate.
+ */
+async function hasOptionSources(): Promise<boolean> {
+  if (optionSourceProbe && Date.now() - optionSourceProbe.at < PROBE_TTL_MS) return optionSourceProbe.value
+  const rows = await prisma.$queryRaw<[{ present: boolean }]>`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'svr_options' AND column_name = 'source_provider'
+    ) AS "present"
+  `
+  const value = Boolean(rows[0]?.present)
+  optionSourceProbe = { value, at: Date.now() }
+  return value
+}
+
+/**
  * The real-world centimetres a size label describes: "20x20cm" -> 20, "137cm" ->
  * 137, "1070mm" -> 107. Takes the first number in the label, so it reads both a
  * square swatch size and an overall-height value; a non-square "10x20" reads as 10
@@ -147,7 +167,11 @@ function isHttpUrl(value: string): boolean {
 }
 
 // One selected option value on a variant child, as the composition needs it.
-export type SelectedOptionValue = { optionId: string; valueId: string; swatch: string | null }
+// One variation option value carried by the child. `swatch` paints a material part;
+// `label` is the words on the value ("140cm", "Oak"), read when the overall size is
+// pointed at a variation option rather than at an attribute - a shop that records
+// the size as a chooser on the Variations screen has the number here and nowhere else.
+export type SelectedOptionValue = { optionId: string; valueId: string; swatch: string | null; label?: string | null }
 // One attribute value assigned to a variant child. Carries both halves of what an
 // attribute value can say: its `label` (the real-world size or overall height, read
 // by parseSwatchCm) and its `swatch` (the picture that paints a material part).
@@ -214,12 +238,20 @@ export function composeFabricBundle(
   // leaves tiling uncalibrated (repeat 1). Which axis it is makes no difference here:
   // a ratio of real to model units is the same number whichever dimension it is taken
   // along, so long as both halves are taken along the SAME one.
+  //
+  // The measurement itself may be typed by hand, ticked on the variation as an
+  // attribute value, or picked as a variation option value - all three say the same
+  // thing about the same product, and which one a shop uses is a matter of how it
+  // was set up rather than of what it sells.
+  const sizeSource = readSizeSource(config.heightAttributeId)
   const sizeLabelForScale =
-    config.heightAttributeId === MANUAL_SIZE_ID
+    sizeSource.kind === 'manual'
       ? config.heightManual
-      : config.heightAttributeId
-        ? sizes.find((z) => matchesSource(z, config.heightAttributeId))?.label
-        : undefined
+      : sizeSource.kind === 'attribute'
+        ? sizes.find((z) => matchesSource(z, sizeSource.id))?.label
+        : sizeSource.kind === 'option'
+          ? selected.find((s) => s.optionId === sizeSource.id)?.label ?? undefined
+          : undefined
   const realCm = sizeLabelForScale ? parseSwatchCm(sizeLabelForScale) : null
 
   const slots = config.slots
@@ -338,8 +370,8 @@ export async function resolveFabricForChild(
   // resolver's.
   if (!(await hasVariationsTables())) return null
 
-  const selected = await prisma.$queryRaw<{ optionId: string; valueId: string; swatch: string | null }[]>`
-    SELECT o."id" AS "optionId", ov."id" AS "valueId", ov."swatch"
+  const selected = await prisma.$queryRaw<SelectedOptionValue[]>`
+    SELECT o."id" AS "optionId", ov."id" AS "valueId", ov."swatch", ov."label"
     FROM "svr_variants" v
     JOIN "svr_variant_values" vv ON vv."variant_id" = v."id"
     JOIN "svr_option_values" ov ON ov."id" = vv."option_value_id"
@@ -519,13 +551,55 @@ export async function listColourAttributes(productId: string): Promise<FabricCol
     }))
 }
 
-export type FabricSizeAttribute = { id: string; name: string; slug: string }
+// One thing the "Overall size from" dropdown can be pointed at. `source` says which
+// of the two screens it came off, so the panel can group them and the admin can tell
+// a "Size" attribute from a "Size" chooser without guessing.
+export type FabricSizeAttribute = { id: string; name: string; slug: string; source: 'attribute' | 'option' }
 
-/** Every size/material attribute, for the "Size from" dropdowns. */
+/**
+ * Everything this product's overall size could be read from: its attributes, and the
+ * variation options set up on the Variations screen.
+ *
+ * Both, because a shop records the size a variation comes in wherever its setup put
+ * it. A shop running product-attributes ticks it as an attribute value on each
+ * variation; a shop that built its variations out of a plain "Size" chooser has the
+ * measurement only as that option's value label, and before this the configurator
+ * simply could not see it - leaving a perfectly well-described product with no way to
+ * pin its scale short of typing one size by hand for the whole range.
+ *
+ * An option BUILT from an attribute (product-attributes' option-source bridge) is left
+ * out where that attribute is already offered: the two are one fact wearing two hats,
+ * and offering both would put the same size in the dropdown twice under the same name.
+ * The attribute is the one kept, since it is what the values actually hang off.
+ */
 export async function listSizeAttributes(productId: string): Promise<FabricSizeAttribute[]> {
-  if (!(await hasAttributeTables())) return []
-  const choices = await listAttributeChoices(productId)
-  return choices.map((c) => ({ id: c.id, name: c.name, slug: c.slug }))
+  const choices = (await hasAttributeTables()) ? await listAttributeChoices(productId) : []
+  const attributes: FabricSizeAttribute[] = choices.map((c) => ({
+    id: c.id,
+    name: c.name,
+    slug: c.slug,
+    source: 'attribute' as const,
+  }))
+  if (!(await hasVariationsTables())) return attributes
+
+  const offered = new Set(choices.map((c) => c.attributeId))
+  // Selected as typed NULLs where the companion module predates its migration 004,
+  // rather than branching the whole statement: one query, one shape back either way.
+  const sourced = await hasOptionSources()
+  const providerCol = sourced ? Prisma.sql`o."source_provider"` : Prisma.sql`NULL::text`
+  const refCol = sourced ? Prisma.sql`o."source_ref"` : Prisma.sql`NULL::text`
+  const rows = await prisma.$queryRaw<{ id: string; name: string; sourceProvider: string | null; sourceRef: string | null }[]>`
+    SELECT o."id", o."name", ${providerCol} AS "sourceProvider", ${refCol} AS "sourceRef"
+    FROM "svr_options" o
+    WHERE o."product_id" = ${productId}
+      AND EXISTS (SELECT 1 FROM "svr_option_values" ov WHERE ov."option_id" = o."id")
+    ORDER BY o."position" ASC, o."name" ASC
+  `
+  const options: FabricSizeAttribute[] = rows
+    .filter((row) => !(row.sourceProvider === 'product-attributes' && row.sourceRef && offered.has(row.sourceRef)))
+    .map((row) => ({ id: optionSizeId(row.id), name: row.name, slug: '', source: 'option' as const }))
+
+  return [...attributes, ...options]
 }
 
 // One thing a config's "Overall height/width from" / "Colour from" dropdown
