@@ -10,14 +10,15 @@
 // stored shape still says fabric (FabricConfig, p3d_fabric_configs), because renaming
 // a saved column buys nothing; only the words the admin reads have changed.
 //
-// The tile SCALE is not set by hand. The model's real-world scale is pinned by the
-// "Overall height" attribute (a real cm value, set per variation), and the rest is
-// measured from the mesh in the browser at config time - each material's texel
-// density and each model's height in its own units - since the server never parses
-// a GLB. Those measurements are baked into the saved config.
+// The tile SCALE is not set by hand. The model's real-world scale is pinned by ONE
+// real dimension - the product's overall height or its overall width, whichever the
+// shop records per variation - and the rest is measured from the mesh in the browser
+// at config time: each material's texel density, and each model's height AND width in
+// its own units, since the server never parses a GLB. Those measurements are baked
+// into the saved config, both axes every time, so switching axis needs no re-read.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureModelWidth, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
@@ -27,7 +28,7 @@ import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-
 
 type FabricSlot = FabricConfig['slots'][number]
 
-const EMPTY: FabricConfig = { heightAttributeId: '', heightManual: '', modelHeights: {}, slots: [] }
+const EMPTY: FabricConfig = { scaleAxis: 'height', heightAttributeId: '', heightManual: '', modelHeights: {}, modelWidths: {}, slots: [] }
 
 // Words that describe the KIND of thing rather than which part it is, dropped
 // before name-matching so "Fabric seat" pairs with "Seat Colour" on "seat" and not
@@ -59,9 +60,15 @@ function guessByName<T>(name: string, list: T[], getName: (item: T) => string): 
 }
 
 // One measurement pass over the configured models: material names + each material's
-// texel density from the face model, and every configured model's height in its own
-// units. Pure of React state so the effect and the button share it without racing.
-type Measurement = { names: string[]; densities: Record<string, number>; heights: Record<string, number> }
+// texel density from the face model, and every configured model's height and width in
+// its own units. Pure of React state so the effect and the button share it without
+// racing.
+//
+// Both dimensions every time, whichever axis the config is on: they come off one
+// bounding box the file has already been parsed for, so the second costs nothing, and
+// storing both means changing the axis re-scales on the spot rather than silently
+// falling back to repeat 1 until someone thinks to press Detect.
+type Measurement = { names: string[]; densities: Record<string, number>; heights: Record<string, number>; widths: Record<string, number> }
 
 async function measureConfigured(
   faceModel: P3dAdminModel | undefined,
@@ -69,10 +76,13 @@ async function measureConfigured(
   allModels: P3dAdminModel[],
 ): Promise<Measurement> {
   const heights: Record<string, number> = {}
+  const widths: Record<string, number> = {}
   for (const id of configuredIds) {
     const model = allModels.find((m) => m.id === id)
     if (!model) continue
-    heights[id] = await measureModelHeight(await loadModel(model.url, model.format))
+    const object = await loadModel(model.url, model.format)
+    heights[id] = await measureModelHeight(object)
+    widths[id] = await measureModelWidth(object)
   }
 
   const densities: Record<string, number> = {}
@@ -82,7 +92,7 @@ async function measureConfigured(
     names = collectMaterialNamesFrom(object)
     for (const name of names) densities[name] = await measureTexelDensity(object, name)
   }
-  return { names, densities, heights }
+  return { names, densities, heights, widths }
 }
 
 const css = `
@@ -146,11 +156,12 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       .then((data: { config: FabricConfig | null; options: FabricColourOption[]; colourAttributes: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
         // The same GLB is attached once per variation, so the raw model list repeats
-        // each file dozens of times (one p3d_models row per variation). A model height
-        // is a fact about the FILE, and the storefront reads it by url, so a saved
-        // height key that lands on a non-representative row must be pulled back to its
-        // file's stand-in row - else its measured height is lost. Canonicalise every
-        // modelHeights key to the first-seen row for its url before anything reads it.
+        // each file dozens of times (one p3d_models row per variation). A model's
+        // measured size is a fact about the FILE, and the storefront reads it by url, so
+        // a saved key that lands on a non-representative row must be pulled back to its
+        // file's stand-in row - else the measurement is lost. Canonicalise every
+        // modelHeights and modelWidths key to the first-seen row for its url before
+        // anything reads them.
         const repByUrl = new Map<string, string>()
         for (const m of data.models) if (!repByUrl.has(m.url)) repByUrl.set(m.url, m.id)
         const canon = (id: string): string => {
@@ -161,6 +172,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         const saved: FabricConfig = {
           ...raw,
           modelHeights: Object.fromEntries(Object.entries(raw.modelHeights).map(([k, v]) => [canon(k), v])),
+          modelWidths: Object.fromEntries(Object.entries(raw.modelWidths).map(([k, v]) => [canon(k), v])),
         }
         setConfig(saved)
         // Seed the densities from what was measured on the last save, so the panel
@@ -214,7 +226,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const applyMeasurement = useCallback((m: Measurement) => {
     setMaterialNames(m.names)
     setDensities((prev) => ({ ...prev, ...m.densities }))
-    setConfig((c) => ({ ...c, modelHeights: { ...c.modelHeights, ...m.heights } }))
+    setConfig((c) => ({
+      ...c,
+      modelHeights: { ...c.modelHeights, ...m.heights },
+      modelWidths: { ...c.modelWidths, ...m.widths },
+    }))
   }, [])
 
   // Measure the configured models whenever the set of them changes, so the material
@@ -354,6 +370,12 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   // for a product with variations.)
   if (loading) return null
 
+  // What the size fields call themselves. One word's difference, but the labels are
+  // the only thing telling the admin which dimension the number they are typing is
+  // meant to be, and a box labelled "Overall height" on the width axis is a
+  // factor-of-anything scale error waiting to happen.
+  const axisLabel = config.scaleAxis === 'width' ? 'Overall width' : 'Overall height'
+
   const materialOptions = (current: string): string[] =>
     materialNames.includes(current) || !current ? materialNames : [current, ...materialNames]
 
@@ -367,7 +389,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           Point each material part of the model - upholstery, wood, laminate, metal, whatever the shopper gets to choose -
           at the picture swatch attribute your finishes live under. On the storefront the model shown is the one attached to the variation the
           shopper picks, painted with their chosen materials. The texture is scaled to true size automatically, from the
-          swatch size recorded against each picture swatch on the Attributes screen and the overall height below - no
+          swatch size recorded against each picture swatch on the Attributes screen and the overall size below - no
           fiddling with tile scale by hand. A swatch with no size set simply goes untiled until you give it one.
           A part the shopper does not get a say in -
           a painted frame, a powder-coated leg - can be set to <strong>Manual</strong> and given one fixed colour instead,
@@ -376,14 +398,27 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         </p>
       </div>
 
-      {/* Overall height: the one attribute that pins each model's real-world scale.
-          The model shown on the storefront is the variation's own attached file, so
-          there is nothing to pick here - only the height to calibrate against. */}
+      {/* Overall size: the one real dimension that pins each model's real-world scale.
+          Height or width, never both - one measurement against the same measurement
+          taken off the mesh is the whole calibration, and a second could only disagree
+          with the first. The model shown on the storefront is the variation's own
+          attached file, so there is nothing to pick here beyond that. */}
       <div className="p3d-fab-sec">
-        <p className="p3d-fab-sub">Overall height</p>
+        <p className="p3d-fab-sub">Overall size</p>
         <div className="p3d-fab-row">
           <div className="p3d-fab-field">
-            <label className="p3d-fab-label">Overall height from</label>
+            <label className="p3d-fab-label">Scale by</label>
+            <select
+              className="p3d-fab-select"
+              value={config.scaleAxis}
+              onChange={(e) => setConfig((c) => ({ ...c, scaleAxis: e.target.value === 'width' ? 'width' : 'height' }))}
+            >
+              <option value="height">Overall height</option>
+              <option value="width">Overall width</option>
+            </select>
+          </div>
+          <div className="p3d-fab-field">
+            <label className="p3d-fab-label">{axisLabel} from</label>
             <select className="p3d-fab-select" value={config.heightAttributeId} onChange={(e) => setConfig((c) => ({ ...c, heightAttributeId: e.target.value }))}>
               <option value="">attribute…</option>
               {attributes.map((a) => (
@@ -392,27 +427,29 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               <option value={MANUAL_SIZE_ID}>Manual</option>
             </select>
           </div>
-          {/* Manual: one height for every variation, typed here. Worth having for a
-              product that varies in colour but not in size, and the only route at all
+          {/* Manual: one measurement for every variation, typed here. Worth having for
+              a product that varies in colour but not in size, and the only route at all
               on a site without the product-attributes module. */}
           {config.heightAttributeId === MANUAL_SIZE_ID && (
             <div className="p3d-fab-field">
-              <label className="p3d-fab-label">Overall height</label>
+              <label className="p3d-fab-label">{axisLabel}</label>
               <input
                 type="text"
                 className="p3d-fab-select"
                 value={config.heightManual}
-                placeholder="e.g. 72cm"
+                placeholder={config.scaleAxis === 'width' ? 'e.g. 140cm' : 'e.g. 72cm'}
                 onChange={(e) => setConfig((c) => ({ ...c, heightManual: e.target.value }))}
               />
             </div>
           )}
           <p className="p3d-fab-help" style={{ flex: 1, minWidth: '12rem' }}>
-            The product&rsquo;s real overall height in cm. It pins the model&rsquo;s true size so the texture scales
-            correctly. Point it at an attribute when the height changes from one variation to the next, or choose
-            <strong> Manual</strong> and type it once when every variation stands the same height. An attribute this
-            product uses more than once appears once per copy, under the name you gave each. The configurator
-            lights up once at least one material part is set below.
+            One real measurement of the product in cm, either its height or its width - whichever your variations
+            actually differ by. It pins the model&rsquo;s true size so the texture scales correctly, and one is all it
+            takes, so there is no second box to keep in step. Point it at an attribute when that measurement changes
+            from one variation to the next, or choose <strong>Manual</strong> and type it once when they are all the
+            same. An attribute this product uses more than once appears once per copy, under the name you gave each.
+            Width is read left-to-right as the model was exported, so a file lying on its side wants re-exporting
+            rather than fudging. The configurator lights up once at least one material part is set below.
           </p>
         </div>
       </div>
@@ -547,7 +584,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
 
       {showPreview && faceModel && settings && (
         <>
-          <p className="p3d-fab-help">Colour and placement preview. On the storefront the texture scale is set exactly from each part&rsquo;s size and the variation&rsquo;s height.</p>
+          <p className="p3d-fab-help">Colour and placement preview. On the storefront the texture scale is set exactly from each part&rsquo;s size and the variation&rsquo;s overall size.</p>
           <div className="p3d-fab-preview">
             <Viewer3d
               item={{ key: 'fabric-preview', productId, url: faceModel.url, format: faceModel.format, label: `${formatLabel(faceModel.format)} preview` }}

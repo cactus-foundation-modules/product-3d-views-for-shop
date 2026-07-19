@@ -191,30 +191,36 @@ function matchesSource(value: ChildSizeValue, id: string): boolean {
  *
  * The model to draw is the caller's business: it is the variation's own attached
  * model (see resolveFabricForChild), not something this function picks. `model` is
- * that model, or null when the variation has none to draw, and `modelHeightUnits`
- * is its measured bounding-box height in its own units (0 when uncalibrated).
+ * that model, or null when the variation has none to draw, and `modelUnits` is its
+ * measured bounding-box extent in its own units ALONG THE CONFIG'S SCALE AXIS - its
+ * height or its width, whichever the config pins its real-world size by (0 when
+ * uncalibrated). Picking the right one of the two is the caller's job, since the
+ * caller is what turns a model id into a measurement in the first place.
  */
 export function composeFabricBundle(
   config: FabricConfig,
   model: { id: string; url: string; format: P3dFormat } | null,
-  modelHeightUnits: number,
+  modelUnits: number,
   selected: SelectedOptionValue[],
   sizes: ChildSizeValue[],
   swatchSizeByUrl: Record<string, string> = {},
 ): FabricBundle | null {
   if (!model) return null
 
-  // The shown model's real overall height (cm, per variation) and its height in the
-  // model's own units (measured at config time). Together they give cm-per-model-unit,
-  // which is what turns a swatch's real size into a true-scale tile repeat. Both are
-  // needed; either absent leaves tiling uncalibrated (repeat 1).
-  const heightLabel =
+  // The shown model's real overall size along the config's scale axis (cm, per
+  // variation) and its extent along that same axis in the model's own units (measured
+  // at config time). Together they give cm-per-model-unit, which is what turns a
+  // swatch's real size into a true-scale tile repeat. Both are needed; either absent
+  // leaves tiling uncalibrated (repeat 1). Which axis it is makes no difference here:
+  // a ratio of real to model units is the same number whichever dimension it is taken
+  // along, so long as both halves are taken along the SAME one.
+  const sizeLabelForScale =
     config.heightAttributeId === MANUAL_SIZE_ID
       ? config.heightManual
       : config.heightAttributeId
         ? sizes.find((z) => matchesSource(z, config.heightAttributeId))?.label
         : undefined
-  const heightCm = heightLabel ? parseSwatchCm(heightLabel) : null
+  const realCm = sizeLabelForScale ? parseSwatchCm(sizeLabelForScale) : null
 
   const slots = config.slots
     .map((slot) => {
@@ -269,7 +275,7 @@ export function composeFabricBundle(
             ? sizes.find((z) => matchesSource(z, slot.sizeAttributeId))?.label ?? ''
             : '')
       const swatchCm = parseSwatchCm(sizeLabel)
-      const repeat = tileRepeat({ heightCm, modelHeightUnits, texelDensity: slot.texelDensity, swatchCm })
+      const repeat = tileRepeat({ realCm, modelUnits, texelDensity: slot.texelDensity, swatchCm })
       return { materialName: slot.materialName, textureUrl, colour: null, repeat, rotationDeg: slot.rotationDeg }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
@@ -284,29 +290,32 @@ export function composeFabricBundle(
 /**
  * The tile repeat for one fabric surface, at true real-world scale.
  *
- * Derivation: the model's real height (`heightCm`) over its height in the model's
- * own units gives cm-per-model-unit. `texelDensity` (UV units per model-unit,
- * measured from the mesh) times that height-in-units is how many UV units the
- * surface spans; a swatch covering `swatchCm` of real fabric should tile once per
- * `swatchCm`, so
+ * Derivation: the model's real size along the scale axis (`realCm` - its overall
+ * height, or its overall width) over its extent along that same axis in the model's
+ * own units gives cm-per-model-unit. `texelDensity` (UV units per model-unit, measured
+ * from the mesh) times that extent-in-units is how many UV units the surface spans; a
+ * swatch covering `swatchCm` of real fabric should tile once per `swatchCm`, so
  *
- *   repeat = realHeightCm / (modelHeightUnits * texelDensity * swatchCm)
+ *   repeat = realCm / (modelUnits * texelDensity * swatchCm)
  *
- * which is dimensionless. Every term must be present and positive; any missing one
- * (an uncalibrated model, a variant with no size or height value) leaves the fabric
- * at repeat 1 - the colour is still correct, only the scale is neutral until the
- * data is filled in. There is deliberately no default size: the size is a
- * per-variation fact, not something this module invents.
+ * which is dimensionless. The axis does not appear in the formula at all - only the
+ * ratio does - which is exactly why one real dimension is enough and why it may be
+ * either one, so long as both halves of the ratio are taken along the same one.
+ *
+ * Every term must be present and positive; any missing one (an uncalibrated model, a
+ * variant with no size value) leaves the fabric at repeat 1 - the colour is still
+ * correct, only the scale is neutral until the data is filled in. There is deliberately
+ * no default size: the size is a per-variation fact, not something this module invents.
  */
 export function tileRepeat(input: {
-  heightCm: number | null
-  modelHeightUnits: number
+  realCm: number | null
+  modelUnits: number
   texelDensity: number
   swatchCm: number | null
 }): number {
-  const { heightCm, modelHeightUnits, texelDensity, swatchCm } = input
-  if (!heightCm || !swatchCm || modelHeightUnits <= 0 || texelDensity <= 0) return 1
-  const repeat = heightCm / (modelHeightUnits * texelDensity * swatchCm)
+  const { realCm, modelUnits, texelDensity, swatchCm } = input
+  if (!realCm || !swatchCm || modelUnits <= 0 || texelDensity <= 0) return 1
+  const repeat = realCm / (modelUnits * texelDensity * swatchCm)
   return Number.isFinite(repeat) && repeat > 0 ? repeat : 1
 }
 
@@ -403,22 +412,28 @@ export async function resolveFabricForChild(
     tree.find((m) => m.productId === parentProductId)
   if (!shown) return null
 
-  // modelHeights is keyed by p3d_models id, but the same GLB is attached once per
+  // The measurement to calibrate against is the one along the config's scale axis:
+  // the model's height, or its width. Both are stored on every save, so this is a
+  // pick, never a re-measure - and an older config, which has heights only, reads as
+  // it always did because it is on the height axis by default.
+  const measured = config.scaleAxis === 'width' ? config.modelWidths : config.modelHeights
+
+  // Those maps are keyed by p3d_models id, but the same GLB is attached once per
   // variation (many rows, one url), so the shown child's row id is not the id the
-  // height was measured against. The height belongs to the FILE - resolve it by url,
-  // so whichever row is shown finds the height measured for its file.
+  // model was measured against. The measurement belongs to the FILE - resolve it by
+  // url, so whichever row is shown finds the number measured for its file.
   const urlById = new Map(tree.map((m) => [m.id, m.url]))
-  const heightByUrl = new Map<string, number>()
-  for (const [id, height] of Object.entries(config.modelHeights)) {
+  const unitsByUrl = new Map<string, number>()
+  for (const [id, units] of Object.entries(measured)) {
     const url = urlById.get(id)
-    if (url) heightByUrl.set(url, height)
+    if (url) unitsByUrl.set(url, units)
   }
-  const modelHeightUnits = heightByUrl.get(shown.url) ?? 0
+  const modelUnits = unitsByUrl.get(shown.url) ?? 0
 
   return composeFabricBundle(
     config,
     { id: shown.id, url: shown.url, format: shown.format },
-    modelHeightUnits,
+    modelUnits,
     selected,
     sizes,
     swatchSizeByUrl,
@@ -513,7 +528,7 @@ export async function listSizeAttributes(productId: string): Promise<FabricSizeA
   return choices.map((c) => ({ id: c.id, name: c.name, slug: c.slug }))
 }
 
-// One thing a config's "Overall height from" / "Size from" / "Colour from" dropdown
+// One thing a config's "Overall height/width from" / "Colour from" dropdown
 // can point at, with the id it is stored under.
 type AttributeChoice = { id: string; attributeId: string; name: string; slug: string }
 

@@ -498,6 +498,24 @@ export async function measureModelHeight(model: Object3D): Promise<number> {
 }
 
 /**
+ * The model's bounding-box width (its X extent) in the model's OWN units,
+ * world-space. The alternative to the height above: a product whose height is the
+ * same across every variation while the width is not - a bench, a sideboard, a run
+ * of worktop - has its real-world scale pinned far more usefully by its width, and
+ * a shop that records one dimension per variation should not have to record a second
+ * just to satisfy the configurator.
+ *
+ * X, not "the widest horizontal side": width means left-to-right as the model was
+ * exported, and quietly taking whichever of X and Z happened to be larger would scale
+ * a deep, narrow cabinet by its depth without ever saying so. A file exported lying on
+ * its side is a file to re-export, not a case to guess at.
+ */
+export async function measureModelWidth(model: Object3D): Promise<number> {
+  const { Box3, Vector3 } = await import('three')
+  return new Box3().setFromObject(model).getSize(new Vector3()).x
+}
+
+/**
  * The texel density of a named material: UV units per model-unit (linear),
  * area-weighted across every triangle carrying that material. This is how the
  * material's texture is stretched over its geometry, and the other number the

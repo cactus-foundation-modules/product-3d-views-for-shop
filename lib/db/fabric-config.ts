@@ -52,14 +52,27 @@ const FabricSlotSchema = z.object({
 })
 
 export const FabricConfigSchema = z.object({
+  // WHICH real-world dimension pins the model's scale: its overall height or its
+  // overall width. One or the other, never both - a single real dimension against the
+  // same dimension measured off the mesh is all it takes to get cm-per-model-unit, and
+  // a second one could only ever disagree with the first.
+  //
+  // Height is the default and what every config saved before this said. Width is for a
+  // product whose height never changes while its width does - a bench, a sideboard, a
+  // run of worktop - where the width is the number the shop already records per
+  // variation and the height would be the same value typed over and over.
+  scaleAxis: z.enum(['height', 'width']).default('height'),
   // pat_attributes id whose per-variation value gives the model's REAL overall
-  // height in cm. That one real dimension pins the model's real-world scale (the
-  // file carries geometry but not reliably its unit - mm vs metres), from which
-  // every fabric surface's true size, and so its tile density, is derived.
-  // May hold MANUAL_SIZE_ID, in which case the height is the hand-typed
-  // `heightManual` below instead.
+  // size in cm ALONG `scaleAxis` - its height, or its width. That one real dimension
+  // pins the model's real-world scale (the file carries geometry but not reliably its
+  // unit - mm vs metres), from which every fabric surface's true size, and so its tile
+  // density, is derived. May hold MANUAL_SIZE_ID, in which case the size is the
+  // hand-typed `heightManual` below instead.
+  //
+  // Still named for the height, since that is what it held for every config written
+  // before width was an option and renaming a stored key buys nothing but a migration.
   heightAttributeId: z.string().default(''),
-  // The hand-typed overall height, used only when heightAttributeId is
+  // The hand-typed overall size along `scaleAxis`, used only when heightAttributeId is
   // MANUAL_SIZE_ID. A product whose variations differ in colour but not in size
   // has one height for the lot, and a site without the product-attributes module
   // has no attribute to point at at all - either way, typing "72cm" once beats
@@ -71,6 +84,12 @@ export const FabricConfigSchema = z.object({
   // variations has one height across all of them. Paired with the real height above
   // to get cm-per-model-unit.
   modelHeights: z.record(z.string(), z.number()).default({}),
+  // The same again along X, for `scaleAxis: 'width'`. Both are measured and stored on
+  // every save regardless of the axis in force, so switching the axis re-scales
+  // immediately instead of waiting on someone to press Detect again. Empty on a config
+  // saved before width existed, which is harmless: such a config is on the height axis,
+  // and this is only read on the width one.
+  modelWidths: z.record(z.string(), z.number()).default({}),
   slots: z.array(FabricSlotSchema).default([]),
 })
 

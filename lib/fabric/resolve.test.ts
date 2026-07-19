@@ -44,12 +44,14 @@ function slot(overrides: Partial<FabricConfig['slots'][number]> = {}): FabricCon
 
 function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
   return {
+    scaleAxis: 'height',
     heightAttributeId: ATTR_HEIGHT,
     heightManual: '',
-    // Each model's bounding-box height in its own units, as measured at config time.
-    // Read by the resolver by file url; composeFabricBundle takes the resolved number
-    // directly, so these are here only to satisfy the config shape.
+    // Each model's bounding-box height and width in its own units, as measured at
+    // config time. Read by the resolver by file url; composeFabricBundle takes the
+    // resolved number directly, so these are here only to satisfy the config shape.
     modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
+    modelWidths: { [MODEL_WITH]: 60, [MODEL_NONE]: 45 },
     slots: [
       slot(),
       slot({ materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE }),
@@ -106,19 +108,29 @@ describe('parseSwatchCm', () => {
 
 describe('tileRepeat', () => {
   it('scales the weave to true size from the calibration and swatch', () => {
-    // repeat = heightCm / (modelHeightUnits * texelDensity * swatchCm)
+    // repeat = realCm / (modelUnits * texelDensity * swatchCm)
     //        = 200 / (100 * 1 * 20) = 0.1
-    expect(tileRepeat({ heightCm: 200, modelHeightUnits: 100, texelDensity: 1, swatchCm: 20 })).toBeCloseTo(0.1)
+    expect(tileRepeat({ realCm: 200, modelUnits: 100, texelDensity: 1, swatchCm: 20 })).toBeCloseTo(0.1)
     // A 10cm swatch tiles twice as densely as a 20cm one over the same surface.
-    expect(tileRepeat({ heightCm: 200, modelHeightUnits: 100, texelDensity: 1, swatchCm: 10 })).toBeCloseTo(0.2)
+    expect(tileRepeat({ realCm: 200, modelUnits: 100, texelDensity: 1, swatchCm: 10 })).toBeCloseTo(0.2)
+  })
+
+  it('gives the same repeat off the width as off the height, at the same ratio', () => {
+    // Only the real-to-model ratio matters, never which dimension it was taken along:
+    // a model 100 units tall standing 200cm high and the same model 60 units wide
+    // measuring 120cm across are the same 2cm per unit, so the weave comes out
+    // identical. This is why one dimension is enough and why either one will do.
+    const byHeight = tileRepeat({ realCm: 200, modelUnits: 100, texelDensity: 1, swatchCm: 20 })
+    const byWidth = tileRepeat({ realCm: 120, modelUnits: 60, texelDensity: 1, swatchCm: 20 })
+    expect(byWidth).toBeCloseTo(byHeight)
   })
 
   it('falls back to 1 (colour right, scale neutral) when any term is missing', () => {
-    const base = { heightCm: 200, modelHeightUnits: 100, texelDensity: 1, swatchCm: 20 }
-    expect(tileRepeat({ ...base, heightCm: null })).toBe(1)
+    const base = { realCm: 200, modelUnits: 100, texelDensity: 1, swatchCm: 20 }
+    expect(tileRepeat({ ...base, realCm: null })).toBe(1)
     expect(tileRepeat({ ...base, swatchCm: null })).toBe(1)
     expect(tileRepeat({ ...base, texelDensity: 0 })).toBe(1)
-    expect(tileRepeat({ ...base, modelHeightUnits: 0 })).toBe(1)
+    expect(tileRepeat({ ...base, modelUnits: 0 })).toBe(1)
   })
 })
 
