@@ -448,17 +448,22 @@ type AttributeChoice = { id: string; attributeId: string; name: string; slug: st
  *    before helpings existed keeps pointing at the same thing without a migration of
  *    the stored JSON. The name still shows the helping's override where it has one.
  *
- * Attributes with no helping on this product are listed after the product's own, which
- * is what this always did (site-wide): a shop can set values on the variations without
- * having declared the attribute on the parent, and dropping those would silently blank
- * a working config.
+ * Attributes with no helping on this product are listed after the product's own, but
+ * only where this product actually carries values for them: a shop can tick values on
+ * the variations without ever declaring the attribute on the parent, and dropping those
+ * would silently blank a working config. An attribute that has nothing to do with this
+ * product is NOT offered - a shop's whole vocabulary in one dropdown is noise, and every
+ * entry in it resolves to nothing.
  */
 async function listAttributeChoices(productId: string): Promise<AttributeChoice[]> {
   const all = await prisma.$queryRaw<{ id: string; name: string; slug: string }[]>`
     SELECT "id", "name", "slug" FROM "pat_attributes" ORDER BY "name" ASC
   `
+  const inUse = await attributesWithValuesOnProduct(productId)
   if (!(await hasAttributeHelpings())) {
-    return all.map((a) => ({ id: a.id, attributeId: a.id, name: a.name, slug: a.slug }))
+    return all
+      .filter((a) => inUse.has(a.id))
+      .map((a) => ({ id: a.id, attributeId: a.id, name: a.name, slug: a.slug }))
   }
 
   const helpings = await prisma.$queryRaw<
@@ -486,7 +491,38 @@ async function listAttributeChoices(productId: string): Promise<AttributeChoice[
       slug: h.slug,
     })),
     ...all
-      .filter((a) => !declared.has(a.id))
+      .filter((a) => !declared.has(a.id) && inUse.has(a.id))
       .map((a) => ({ id: a.id, attributeId: a.id, name: a.name, slug: a.slug })),
   ]
+}
+
+/**
+ * The attributes this product has values ticked for, on the parent itself or on any of
+ * its variant children. Undeclared attributes are only worth offering when there is
+ * something behind them; without this the dropdowns list the shop's entire attribute
+ * vocabulary, most of which the product has never heard of.
+ *
+ * The variant-child half is where the real answer usually lives: per-variation values
+ * are ticked on the hidden child products, and a size that changes from one variation
+ * to the next is exactly what these dropdowns are for. Skipped when shop-variations is
+ * absent, since then there are no children to look at.
+ */
+async function attributesWithValuesOnProduct(productId: string): Promise<Set<string>> {
+  const rows = (await hasVariationsTables())
+    ? await prisma.$queryRaw<{ attributeId: string }[]>`
+        SELECT DISTINCT av."attribute_id" AS "attributeId"
+        FROM "pat_product_values" pv
+        JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+        WHERE pv."product_id" = ${productId}
+           OR pv."product_id" IN (
+             SELECT v."child_product_id" FROM "svr_variants" v WHERE v."product_id" = ${productId}
+           )
+      `
+    : await prisma.$queryRaw<{ attributeId: string }[]>`
+        SELECT DISTINCT av."attribute_id" AS "attributeId"
+        FROM "pat_product_values" pv
+        JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+        WHERE pv."product_id" = ${productId}
+      `
+  return new Set(rows.map((r) => r.attributeId))
 }
