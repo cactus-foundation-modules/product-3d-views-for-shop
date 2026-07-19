@@ -9,12 +9,16 @@ import { listColourAttributes, listColourOptions, listSizeAttributes } from '@/m
 // The fabric configurator's admin data and save. `id` is always the PARENT product.
 //
 // GET returns everything the panel needs to build its dropdowns: the saved config,
-// the product's variation options + values and the site's swatch-carrying attributes
+// the product's variation options + values and the swatch-carrying attributes
 // (both offered as colour sources, since a range's finishes live in one or the
-// other depending on how the shop was set up), every size attribute (for the size
-// dropdowns), the product's attached models, and the viewer settings for the
+// other depending on how the shop was set up), the attributes offered to the size
+// dropdowns, the product's attached models, and the viewer settings for the
 // panel's live preview. Material names are detected client-side
 // from the model itself, so the server never parses a GLB.
+//
+// Both attribute lists are per-product rather than site-wide, because a product may
+// now use one attribute more than once under names of its own - each helping is its
+// own entry, so a part can be pointed at the one that carries its values.
 //
 // The viewer settings ride along here rather than being fetched from the settings
 // route because that one is gated on 'shop.manage', which a 'shop.products' admin
@@ -30,8 +34,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const [config, options, colourAttributes, attributes, models, siteSettings, productSettings] = await Promise.all([
     getFabricConfig(id),
     listColourOptions(id),
-    listColourAttributes(),
-    listSizeAttributes(),
+    listColourAttributes(id),
+    listSizeAttributes(id),
     getAdminModels(id),
     getP3dConfig(),
     getP3dProductConfig(id),

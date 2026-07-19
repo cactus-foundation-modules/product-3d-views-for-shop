@@ -15,6 +15,11 @@ const ATTR_BACK_SIZE = 'attr-back-size'
 const ATTR_HEIGHT = 'attr-height'
 // An attribute used as a COLOUR source rather than as a measurement.
 const ATTR_FINISH = 'attr-finish'
+// One attribute used twice on the same product, and the id of each helping - what a
+// config points at when "Fabric" appears as both "Seat fabric" and "Back fabric".
+const ATTR_FABRIC = 'attr-fabric'
+const HELP_SEAT_FABRIC = 'help-seat-fabric'
+const HELP_BACK_FABRIC = 'help-back-fabric'
 const MODEL_WITH = 'model-with'
 const MODEL_NONE = 'model-none'
 
@@ -386,6 +391,66 @@ describe('composeFabricBundle', () => {
     )
     expect(bundle?.slots[0]?.rotationDeg).toBe(90)
     // The turn is the texture's business alone - it must not disturb the scale.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  // A product may use one attribute more than once, each helping under a name of its
+  // own, and a variation's value is ticked under one helping in particular. A config
+  // that points at a HELPING must read that helping's value and no other - matching
+  // on the attribute alone would take whichever row came back first.
+  it('reads the helping a part points at, not the other helping of the same attribute', () => {
+    const bundle = composeFabricBundle(
+      config({
+        heightAttributeId: ATTR_HEIGHT,
+        slots: [
+          slot({ materialName: 'Fabric seat', colourOptionId: attributeColourId(HELP_SEAT_FABRIC), sizeAttributeId: HELP_SEAT_FABRIC }),
+          slot({ materialName: 'Fabric back', colourOptionId: attributeColourId(HELP_BACK_FABRIC), sizeAttributeId: HELP_BACK_FABRIC }),
+        ],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, assignmentId: null, label: '200cm' },
+        { attributeId: ATTR_FABRIC, assignmentId: HELP_SEAT_FABRIC, label: '20x20cm', swatch: CRAB_URL },
+        { attributeId: ATTR_FABRIC, assignmentId: HELP_BACK_FABRIC, label: '10x10cm', swatch: TEAL_URL },
+      ],
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+      { materialName: 'Fabric back', textureUrl: TEAL_URL, colour: null, repeat: 0.2, rotationDeg: 0 },
+    ])
+  })
+
+  it('reads a helping for the overall height too', () => {
+    const bundle = composeFabricBundle(
+      config({ heightAttributeId: HELP_BACK_FABRIC, slots: [slot({ sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '20cm' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_FABRIC, assignmentId: HELP_SEAT_FABRIC, label: '100cm' },
+        { attributeId: ATTR_FABRIC, assignmentId: HELP_BACK_FABRIC, label: '200cm' },
+      ],
+    )
+    // 200 / (100 * 1 * 20) = 0.1 - the second helping's height, not the first's.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  // The unambiguous case keeps storing the bare attribute id, and every config saved
+  // before helpings existed holds one, so a bare id must still match a value that now
+  // arrives stamped with its helping.
+  it('still resolves a config that names the attribute rather than a helping', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ sizeAttributeId: ATTR_SEAT_SIZE })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, assignmentId: 'help-height', label: '200cm' },
+        { attributeId: ATTR_SEAT_SIZE, assignmentId: 'help-seat-size', label: '20x20cm' },
+      ],
+    )
     expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
   })
 })

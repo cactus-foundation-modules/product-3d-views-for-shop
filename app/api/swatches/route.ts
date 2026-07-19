@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
     // are simply searched together.
     const [variationOptions, colourAttributes] = await Promise.all([
       listColourOptions(parent),
-      listColourAttributes(),
+      listColourAttributes(parent),
     ])
     const urls = new Set<string>()
     for (const option of [...variationOptions, ...colourAttributes]) {

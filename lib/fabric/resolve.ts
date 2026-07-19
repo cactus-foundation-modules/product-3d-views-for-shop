@@ -18,6 +18,7 @@ import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
 let svrProbe: { value: boolean; at: number } | null = null
 let patProbe: { value: boolean; at: number } | null = null
+let helpingProbe: { value: boolean; at: number } | null = null
 const PROBE_TTL_MS = 30_000
 
 export async function hasVariationsTables(): Promise<boolean> {
@@ -46,6 +47,36 @@ export async function hasAttributeTables(): Promise<boolean> {
   `
   const value = Boolean(rows[0]?.present)
   patProbe = { value, at: Date.now() }
+  return value
+}
+
+/**
+ * Whether the companion attributes module is new enough to let one product use the
+ * same attribute more than once (its migration 005: a surrogate id and a
+ * `name_override` on each helping, and an `assignment_id` on each ticked value).
+ *
+ * Probed by column rather than assumed from the table, because this module pins no
+ * version of product-attributes-for-shop and an install can be a deploy behind. On
+ * an older one the configurator simply offers one entry per attribute, exactly as it
+ * always did - so nothing here is a hard dependency.
+ */
+export async function hasAttributeHelpings(): Promise<boolean> {
+  if (helpingProbe && Date.now() - helpingProbe.at < PROBE_TTL_MS) return helpingProbe.value
+  const rows = await prisma.$queryRaw<[{ present: boolean }]>`
+    SELECT (
+      to_regclass('public.pat_product_attributes') IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pat_product_attributes' AND column_name = 'name_override'
+      )
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'pat_product_values' AND column_name = 'assignment_id'
+      )
+    ) AS "present"
+  `
+  const value = Boolean(rows[0]?.present)
+  helpingProbe = { value, at: Date.now() }
   return value
 }
 
@@ -95,7 +126,24 @@ export type SelectedOptionValue = { optionId: string; valueId: string; swatch: s
 // Which of the two is used depends on where the config points at the attribute, not
 // on the value itself - an "Oak" finish attribute has no useful number in its label
 // and a "20x20cm" swatch-size attribute has no picture.
-export type ChildSizeValue = { attributeId: string; label: string; swatch?: string | null }
+// `assignmentId` is which HELPING of that attribute the value was ticked under, on
+// a product that uses the same attribute more than once ("Top material" and "Frame
+// material" both off one Material vocabulary). Null on a value written before
+// helpings existed, or by an older product-attributes install.
+export type ChildSizeValue = { attributeId: string; assignmentId?: string | null; label: string; swatch?: string | null }
+
+/**
+ * Whether a child's attribute value answers to the id a config points at.
+ *
+ * A config stores a HELPING's id when the product uses that attribute more than
+ * once, and the bare ATTRIBUTE id otherwise - see listAttributeChoices for why the
+ * unambiguous case keeps its old id rather than being migrated. Both are read here
+ * so one lookup serves either, and so every config saved before helpings existed
+ * keeps resolving untouched.
+ */
+function matchesSource(value: ChildSizeValue, id: string): boolean {
+  return value.assignmentId === id || value.attributeId === id
+}
 
 /**
  * Compose the viewer bundle for a resolved model and a child's selections. Pure and
@@ -124,7 +172,7 @@ export function composeFabricBundle(
     config.heightAttributeId === MANUAL_SIZE_ID
       ? config.heightManual
       : config.heightAttributeId
-        ? sizes.find((z) => z.attributeId === config.heightAttributeId)?.label
+        ? sizes.find((z) => matchesSource(z, config.heightAttributeId))?.label
         : undefined
   const heightCm = heightLabel ? parseSwatchCm(heightLabel) : null
 
@@ -145,7 +193,7 @@ export function composeFabricBundle(
       // (scale, rotation) is the same for both.
       const swatch =
         source.kind === 'attribute'
-          ? sizes.find((z) => z.attributeId === source.id)?.swatch ?? ''
+          ? sizes.find((z) => matchesSource(z, source.id))?.swatch ?? ''
           : selected.find((s) => s.optionId === source.id)?.swatch ?? ''
       // Both modules store one visual per value in the same column: a media url for
       // a picture swatch, a hex colour for a plain colour one. A picture is a texture
@@ -164,7 +212,7 @@ export function composeFabricBundle(
       const sizeLabel =
         slot.sizeAttributeId === MANUAL_SIZE_ID
           ? slot.sizeManual
-          : sizes.find((z) => z.attributeId === slot.sizeAttributeId)?.label ?? ''
+          : sizes.find((z) => matchesSource(z, slot.sizeAttributeId))?.label ?? ''
       const swatchCm = parseSwatchCm(sizeLabel)
       const repeat = tileRepeat({ heightCm, modelHeightUnits, texelDensity: slot.texelDensity, swatchCm })
       return { materialName: slot.materialName, textureUrl, colour: null, repeat, rotationDeg: slot.rotationDeg }
@@ -240,15 +288,29 @@ export async function resolveFabricForChild(
   // option all ride in here (all pat_attributes). Without product-attributes
   // there are none, so tiling stays uncalibrated (repeat 1) and only the colour is
   // applied, which composeFabricBundle handles.
-  const sizes = (await hasAttributeTables())
-    ? await prisma.$queryRaw<{ attributeId: string; label: string; swatch: string | null }[]>`
-        SELECT a."id" AS "attributeId", av."label", av."swatch"
-        FROM "pat_product_values" pv
-        JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
-        JOIN "pat_attributes" a ON a."id" = av."attribute_id"
-        WHERE pv."product_id" = ${childProductId}
-      `
-    : []
+  // `assignment_id` says which HELPING the value was ticked under, so a product
+  // using one attribute twice ("Seat fabric" and "Back fabric" off one Fabric
+  // vocabulary) resolves each part from its own value instead of whichever row the
+  // database happened to return first. Read only where the companion module is new
+  // enough to have the column - on an older one every value comes back unattributed
+  // and the config's bare attribute ids still match, which is what they always did.
+  const sizes: ChildSizeValue[] = !(await hasAttributeTables())
+    ? []
+    : (await hasAttributeHelpings())
+      ? await prisma.$queryRaw<ChildSizeValue[]>`
+          SELECT a."id" AS "attributeId", pv."assignment_id" AS "assignmentId", av."label", av."swatch"
+          FROM "pat_product_values" pv
+          JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+          JOIN "pat_attributes" a ON a."id" = av."attribute_id"
+          WHERE pv."product_id" = ${childProductId}
+        `
+      : await prisma.$queryRaw<ChildSizeValue[]>`
+          SELECT a."id" AS "attributeId", av."label", av."swatch"
+          FROM "pat_product_values" pv
+          JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
+          JOIN "pat_attributes" a ON a."id" = av."attribute_id"
+          WHERE pv."product_id" = ${childProductId}
+        `
 
   // The whole product tree in one read: the model to draw (the child's own, else the
   // parent's) and the map that turns a config's model-height entry into a per-url
@@ -324,33 +386,107 @@ export async function listColourOptions(productId: string): Promise<FabricColour
  * renders nothing. Site-wide rather than per-product, because attribute values are
  * assigned to a variation rather than declared on the parent the way options are.
  */
-export async function listColourAttributes(): Promise<FabricColourOption[]> {
+export async function listColourAttributes(productId: string): Promise<FabricColourOption[]> {
   if (!(await hasAttributeTables())) return []
   const rows = await prisma.$queryRaw<
-    { attributeId: string; name: string; valueId: string; label: string; swatch: string | null }[]
+    { attributeId: string; valueId: string; label: string; swatch: string | null }[]
   >`
-    SELECT a."id" AS "attributeId", a."name", av."id" AS "valueId", av."label", av."swatch"
+    SELECT a."id" AS "attributeId", av."id" AS "valueId", av."label", av."swatch"
     FROM "pat_attributes" a
     JOIN "pat_attribute_values" av ON av."attribute_id" = a."id"
     WHERE av."swatch" IS NOT NULL AND av."swatch" <> ''
     ORDER BY a."name" ASC, av."position" ASC
   `
-  const byId = new Map<string, FabricColourOption>()
+  const valuesByAttribute = new Map<string, FabricColourOption['values']>()
   for (const row of rows) {
-    const existing = byId.get(row.attributeId) ?? { id: attributeColourId(row.attributeId), name: row.name, values: [] }
-    existing.values.push({ id: row.valueId, label: row.label, swatch: row.swatch })
-    byId.set(row.attributeId, existing)
+    const list = valuesByAttribute.get(row.attributeId) ?? []
+    list.push({ id: row.valueId, label: row.label, swatch: row.swatch })
+    valuesByAttribute.set(row.attributeId, list)
   }
-  return [...byId.values()]
+  // One entry per HELPING rather than per attribute, so a product that paints two
+  // parts off one finish vocabulary can point each at the helping that carries its
+  // own values. The values offered are the attribute's - a helping narrows which
+  // block a value was ticked in, not which values exist.
+  const choices = await listAttributeChoices(productId)
+  return choices
+    .filter((choice) => valuesByAttribute.has(choice.attributeId))
+    .map((choice) => ({
+      id: attributeColourId(choice.id),
+      name: choice.name,
+      values: valuesByAttribute.get(choice.attributeId) ?? [],
+    }))
 }
 
 export type FabricSizeAttribute = { id: string; name: string; slug: string }
 
 /** Every size/material attribute, for the "Size from" dropdowns. */
-export async function listSizeAttributes(): Promise<FabricSizeAttribute[]> {
+export async function listSizeAttributes(productId: string): Promise<FabricSizeAttribute[]> {
   if (!(await hasAttributeTables())) return []
-  const rows = await prisma.$queryRaw<{ id: string; name: string; slug: string }[]>`
+  const choices = await listAttributeChoices(productId)
+  return choices.map((c) => ({ id: c.id, name: c.name, slug: c.slug }))
+}
+
+// One thing a config's "Overall height from" / "Size from" / "Colour from" dropdown
+// can point at, with the id it is stored under.
+type AttributeChoice = { id: string; attributeId: string; name: string; slug: string }
+
+/**
+ * What this product's attribute dropdowns offer, one entry per helping.
+ *
+ * A product may now use the same attribute more than once, each helping under a name
+ * of its own, and a variation's value is ticked under one helping in particular. So
+ * "Material" appearing twice on the product has to appear twice here too - otherwise
+ * the configurator can only say "paint this part from Material" and the resolver is
+ * left guessing which of the two it meant.
+ *
+ * The id a choice is stored under depends on whether there is anything to tell apart:
+ *
+ *  - Used more than once -> the HELPING's id, which is the only thing that
+ *    distinguishes "Top material" from "Frame material".
+ *  - Used once (or not declared on this product at all) -> the ATTRIBUTE's id, exactly
+ *    as before. There is nothing ambiguous to resolve, and it means every config saved
+ *    before helpings existed keeps pointing at the same thing without a migration of
+ *    the stored JSON. The name still shows the helping's override where it has one.
+ *
+ * Attributes with no helping on this product are listed after the product's own, which
+ * is what this always did (site-wide): a shop can set values on the variations without
+ * having declared the attribute on the parent, and dropping those would silently blank
+ * a working config.
+ */
+async function listAttributeChoices(productId: string): Promise<AttributeChoice[]> {
+  const all = await prisma.$queryRaw<{ id: string; name: string; slug: string }[]>`
     SELECT "id", "name", "slug" FROM "pat_attributes" ORDER BY "name" ASC
   `
-  return rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug }))
+  if (!(await hasAttributeHelpings())) {
+    return all.map((a) => ({ id: a.id, attributeId: a.id, name: a.name, slug: a.slug }))
+  }
+
+  const helpings = await prisma.$queryRaw<
+    { assignmentId: string; attributeId: string; name: string; slug: string; helpings: number }[]
+  >`
+    SELECT ppa."id" AS "assignmentId", a."id" AS "attributeId",
+           COALESCE(NULLIF(TRIM(ppa."name_override"), ''), a."name") AS "name",
+           a."slug",
+           (
+             SELECT COUNT(*)::int FROM "pat_product_attributes" other
+             WHERE other."product_id" = ppa."product_id" AND other."attribute_id" = ppa."attribute_id"
+           ) AS "helpings"
+    FROM "pat_product_attributes" ppa
+    JOIN "pat_attributes" a ON a."id" = ppa."attribute_id"
+    WHERE ppa."product_id" = ${productId}
+    ORDER BY ppa."position" ASC, a."name" ASC
+  `
+
+  const declared = new Set(helpings.map((h) => h.attributeId))
+  return [
+    ...helpings.map((h) => ({
+      id: h.helpings > 1 ? h.assignmentId : h.attributeId,
+      attributeId: h.attributeId,
+      name: h.name,
+      slug: h.slug,
+    })),
+    ...all
+      .filter((a) => !declared.has(a.id))
+      .map((a) => ({ id: a.id, attributeId: a.id, name: a.name, slug: a.slug })),
+  ]
 }

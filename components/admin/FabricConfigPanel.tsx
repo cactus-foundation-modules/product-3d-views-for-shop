@@ -410,7 +410,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           <p className="p3d-fab-help" style={{ flex: 1, minWidth: '12rem' }}>
             The product&rsquo;s real overall height in cm. It pins the model&rsquo;s true size so the texture scales
             correctly. Point it at an attribute when the height changes from one variation to the next, or choose
-            <strong> Manual</strong> and type it once when every variation stands the same height. The configurator
+            <strong> Manual</strong> and type it once when every variation stands the same height. An attribute this
+            product uses more than once appears once per copy, under the name you gave each. The configurator
             lights up once at least one material part is set below.
           </p>
         </div>
@@ -454,9 +455,12 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               <div className="p3d-fab-field">
                 <label className="p3d-fab-label">Colour from</label>
                 {/* Two sources, kept visibly apart: the product's own variation
-                    options, and the site-wide attributes whose values carry a swatch.
-                    Which one a shop's finishes live in is a setup choice, not a rule,
-                    so both are on offer here. */}
+                    options, and the attributes whose values carry a swatch. Which one
+                    a shop's finishes live in is a setup choice, not a rule, so both
+                    are on offer here. An attribute the product uses more than once is
+                    listed once per helping, under the name that helping goes by, so
+                    "Seat fabric" and "Back fabric" off one Fabric vocabulary are
+                    pickable apart rather than collapsing into one entry. */}
                 <select className="p3d-fab-select" value={slot.colourOptionId} onChange={(e) => setSlot(i, { colourOptionId: e.target.value })}>
                   <option value="">option…</option>
                   {variationOptions.length > 0 && (
