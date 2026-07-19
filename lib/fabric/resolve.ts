@@ -200,6 +200,7 @@ export function composeFabricBundle(
   modelHeightUnits: number,
   selected: SelectedOptionValue[],
   sizes: ChildSizeValue[],
+  swatchSizeByUrl: Record<string, string> = {},
 ): FabricBundle | null {
   if (!model) return null
 
@@ -245,16 +246,23 @@ export function composeFabricBundle(
         return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
       }
       const textureUrl = swatch
-      // The swatch's real size comes from the swatch itself: the attribute value that
-      // supplied the picture also carries how big the real material in it is. Nothing
-      // to point at and nothing to keep in step - a part painted from "Oak" is scaled
-      // by whatever size "Oak" was given.
+      // The swatch's real size comes from the swatch itself, by either of two roads:
       //
-      // The `sizeAttributeId` fallback below is the older route, kept only so a config
+      //  1. The attribute value that supplied the picture carries the size beside it.
+      //  2. The part is painted from a VARIATION OPTION, whose value shows the very
+      //     same picture as an attribute value elsewhere in the shop - which is the
+      //     usual arrangement, since a shop's swatch photographs get used in both
+      //     places. `swatchSizeByUrl` maps that picture to its recorded size, so an
+      //     option-painted part is scaled by the same fact as an attribute-painted
+      //     one. The size describes the PICTURE, so matching on the picture is exactly
+      //     as strong as the claim being made.
+      //
+      // The `sizeAttributeId` fallback last is the older route, kept only so a config
       // saved before swatches had sizes of their own goes on scaling as it did. Nothing
-      // writes it any more; a swatch with a size wins over it in every case.
+      // writes it any more; a swatch with a size of its own wins over it in every case.
       const sizeLabel =
         attributeValue?.swatchSize?.trim() ||
+        swatchSizeByUrl[textureUrl]?.trim() ||
         (slot.sizeAttributeId === MANUAL_SIZE_ID
           ? slot.sizeManual
           : slot.sizeAttributeId
@@ -363,6 +371,29 @@ export async function resolveFabricForChild(
         WHERE pv."product_id" = ${childProductId}
       `
 
+  // Every picture swatch that has been given a real-world size, keyed by the picture
+  // itself. This is what scales a part painted from a VARIATION OPTION: the option's
+  // value and an attribute's value show the same photograph (a shop keeps one set of
+  // swatch pictures, and shop-variations' own values are usually filled from them), so
+  // the size recorded against the attribute value describes the option's picture just
+  // as truly. Without it, a shop whose finishes live in options rather than attributes
+  // could set every size correctly and still tile at repeat 1.
+  //
+  // Site-wide and unfiltered because it is keyed by url, not by product: a lookup table
+  // the size of the shop's swatch vocabulary, not of its catalogue. Empty on an install
+  // whose product-attributes is older than the column.
+  const swatchSizeByUrl: Record<string, string> = {}
+  if (hasAttributes && (await hasSwatchSizes())) {
+    const sized = await prisma.$queryRaw<{ swatch: string; swatchSize: string }[]>`
+      SELECT "swatch", "swatch_size" AS "swatchSize"
+      FROM "pat_attribute_values"
+      WHERE "swatch" LIKE 'http%' AND "swatch_size" IS NOT NULL AND "swatch_size" <> ''
+    `
+    // First one wins: the same picture given two different sizes is a contradiction the
+    // resolver cannot settle, and picking the later row would only make it non-deterministic.
+    for (const row of sized) if (!(row.swatch in swatchSizeByUrl)) swatchSizeByUrl[row.swatch] = row.swatchSize
+  }
+
   // The whole product tree in one read: the model to draw (the child's own, else the
   // parent's) and the map that turns a config's model-height entry into a per-url
   // fact both come from it.
@@ -390,6 +421,7 @@ export async function resolveFabricForChild(
     modelHeightUnits,
     selected,
     sizes,
+    swatchSizeByUrl,
   )
 }
 

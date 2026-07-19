@@ -365,6 +365,64 @@ describe('composeFabricBundle', () => {
     ])
   })
 
+  it('scales an OPTION-painted part from the swatch size recorded against the same picture', () => {
+    // The shop's finishes live in variation options, and the size lives on the
+    // attribute value showing the same photograph - the arrangement on the live
+    // Deskwell chair, whose config predates attributes being a colour source at all.
+    // 200cm / (100 units * 1 density * 20cm) = 0.1.
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: '', sizeManual: '' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+      { [CRAB_URL]: '20x20cm' },
+    )
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+    ])
+  })
+
+  it('scales each part by its own picture, not one size for the whole product', () => {
+    // The same chair in two fabrics whose swatches are photographed at different real
+    // sizes - 10cm on the seat, 20cm on the back. A per-product size cannot express
+    // this; a per-picture one falls out of it.
+    const bundle = composeFabricBundle(
+      config({
+        slots: [
+          slot({ materialName: 'Fabric seat', colourOptionId: OPT_SEAT_COLOUR, sizeAttributeId: '', sizeManual: '' }),
+          slot({ materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: '', sizeManual: '' }),
+        ],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(
+        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL },
+        { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: TEAL_URL },
+      ),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+      { [CRAB_URL]: '10x10cm', [TEAL_URL]: '20x20cm' },
+    )
+    expect(bundle?.slots.map((s) => s.repeat)).toEqual([0.2, 0.1])
+  })
+
+  it('prefers the attribute value own size over the by-picture lookup', () => {
+    // Both roads available and disagreeing: the value the part was actually painted
+    // from is the more specific fact, so it wins. 200 / (100 * 1 * 20) = 0.1.
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: '', sizeManual: '' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_FINISH, label: 'Oak', swatch: CRAB_URL, swatchSize: '20cm' },
+      ],
+      { [CRAB_URL]: '40cm' },
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(0.1)
+  })
+
   it('leaves an attribute-painted part alone when this variation carries no value for it', () => {
     const bundle = composeFabricBundle(
       config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH) })] }),
