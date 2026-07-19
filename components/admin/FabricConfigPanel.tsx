@@ -190,14 +190,26 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   }, [productId])
 
   // Both colour sources as one list, for everything that only needs to look a slot's
-  // stored id up - the preview above all. Picture-swatch attributes are the only thing
-  // the dropdown offers now, but a config saved when variation options were on offer
-  // still points at one, and it goes on being painted; leaving those out here would
-  // blank the preview of a product that works perfectly well on the storefront.
+  // stored id up - the preview above all. The dropdown offers a filtered view of
+  // this (paintable options only), but a stored id must resolve here whatever it
+  // points at, or the preview of a working product goes blank.
   // Attribute ids arrive prefixed from the server, so the two can never collide.
   const colourSources = useMemo(
     () => [...variationOptions, ...colourAttributes],
     [variationOptions, colourAttributes],
+  )
+
+  // The variation options worth offering as a colour source: those with at least one
+  // value carrying a swatch (a picture url or a plain hex - the resolver paints
+  // either). A shop's finishes live here rather than as attribute values whenever its
+  // variations were built straight off the Variations screen - including options
+  // BRIDGED from an attribute, whose ticked values exist only as option values, so
+  // the attribute list alone would offer nothing at all for such a product. A "Width"
+  // or "Seats" chooser has no swatches and is left out; there is nothing to paint
+  // with.
+  const paintableOptions = useMemo(
+    () => variationOptions.filter((o) => o.values.some((v) => v.swatch && v.swatch.trim() !== '')),
+    [variationOptions],
   )
 
   // The overall-size sources, split by the screen they were set up on. Anything not
@@ -286,17 +298,18 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const addSlot = () => {
     const used = new Set(config.slots.map((s) => s.materialName))
     const name = materialNames.find((n) => !used.has(n)) ?? materialNames[0] ?? ''
-    const colour = guessByName(name, colourAttributes, (o) => o.name)
+    const offered = [...colourAttributes, ...paintableOptions]
+    const colour = guessByName(name, offered, (o) => o.name)
     setConfig((c) => ({
       ...c,
       slots: [
         ...c.slots,
         {
           materialName: name,
-          // With no picture-swatch attributes on the site at all, a fixed colour is the
+          // With no paintable source on the product at all, a fixed colour is the
           // only route there is, so a new part lands there rather than on an empty
           // dropdown.
-          colourOptionId: colour?.id ?? colourAttributes[0]?.id ?? MANUAL_COLOUR_ID,
+          colourOptionId: colour?.id ?? offered[0]?.id ?? MANUAL_COLOUR_ID,
           colourManual: '',
           // Legacy fields, kept empty: the swatch's size comes from the material it was
           // picked from, not from anything set here. See lib/db/fabric-config.ts.
@@ -500,11 +513,13 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           // would only invite the admin to fill in numbers that do nothing.
           const manualColour = slot.colourOptionId === MANUAL_COLOUR_ID
           const hex = parseHexColour(slot.colourManual)
-          // A variation option this slot was pointed at before the dropdown narrowed to
-          // picture-swatch attributes. Offered back as its own entry so opening the
-          // panel does not quietly re-point a working product at something else; there
-          // is no way to pick one that is not already stored.
-          const legacySource = variationOptions.find((o) => o.id === slot.colourOptionId)
+          // A stored source the dropdown no longer offers - a variation option whose
+          // swatches were since cleared, say. Offered back as its own entry so opening
+          // the panel does not quietly re-point a working product at something else;
+          // there is no way to pick one that is not already stored.
+          const legacySource = paintableOptions.some((o) => o.id === slot.colourOptionId)
+            ? undefined
+            : variationOptions.find((o) => o.id === slot.colourOptionId)
           return (
             <div key={i} className="p3d-fab-row">
               <div className="p3d-fab-field">
@@ -518,22 +533,32 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
               </div>
               <div className="p3d-fab-field">
                 <label className="p3d-fab-label">Colour from</label>
-                {/* Picture-swatch attributes only, plus a fixed colour. They are the
-                    only source that carries both halves of what a real material needs -
-                    the picture and the real-world size of it - so a part pointed at one
-                    is scaled as well as coloured, with nothing else to keep in step. An
-                    attribute the product uses more than once is listed once per helping,
-                    under the name that helping goes by, so "Seat fabric" and "Back
-                    fabric" off one Fabric vocabulary are pickable apart rather than
-                    collapsing into one entry.
-                    A config saved when variation options were on offer keeps whatever
-                    it points at - shown here as its stored entry so it is not silently
-                    re-pointed by opening this panel. */}
+                {/* Grouped by which screen the source lives on, exactly as the overall
+                    size dropdown above. Picture-swatch attributes carry both halves of
+                    what a real material needs - the picture and its real-world size -
+                    but plenty of shops keep their finishes as swatch-carrying variation
+                    options instead (including options bridged FROM an attribute, whose
+                    values live only on the option), so both are offered. An attribute
+                    the product uses more than once is listed once per helping, under
+                    the name that helping goes by.
+                    A config pointing at a source no longer on offer keeps its stored
+                    entry so opening this panel does not silently re-point it. */}
                 <select className="p3d-fab-select" value={slot.colourOptionId} onChange={(e) => setSlot(i, { colourOptionId: e.target.value })}>
-                  <option value="">material…</option>
-                  {colourAttributes.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
+                  <option value="">choose…</option>
+                  {colourAttributes.length > 0 && (
+                    <optgroup label="Attributes">
+                      {colourAttributes.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {paintableOptions.length > 0 && (
+                    <optgroup label="Variation options">
+                      {paintableOptions.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                   {legacySource && <option value={slot.colourOptionId}>{legacySource.name} (variation option)</option>}
                   <option value={MANUAL_COLOUR_ID}>Manual</option>
                 </select>
