@@ -8,6 +8,7 @@ import { signAssetUrl } from '@/lib/media/asset-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
 import { createModel, getAdminModels, getProductOptions, getTargets, isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { resolve3dFolderId } from '@/modules/product-3d-views-for-shop/lib/media-folder'
+import { buildModelKey } from '@/modules/product-3d-views-for-shop/lib/model-key'
 import {
   P3D_MAX_UPLOAD_BYTES,
   P3D_MAX_UPLOAD_MB,
@@ -270,7 +271,16 @@ async function uploadThroughServer(request: NextRequest, id: string, provider: P
     const folderId = await resolve3dFolderId(id)
     const folderPath = folderId ? await resolveFolderPath(folderId) : ''
     const buffer = Buffer.from(await file.arrayBuffer())
-    const result = await uploadMedia(buffer, mimeType, provider, file.name, folderPath || undefined)
+    // Same naming as the direct path - the model is filed under the product's own
+    // name rather than a nanoid. See lib/model-key.ts.
+    const { nameForKey, exactName } = await buildModelKey({
+      provider,
+      mimeType,
+      filename: file.name,
+      folderPath: folderPath || undefined,
+      parentProductId: id,
+    })
+    const result = await uploadMedia(buffer, mimeType, provider, nameForKey, folderPath || undefined, exactName)
 
     // Recorded in the core library as well as in our own table, so the model turns
     // up in Media under the product's 3d folder rather than being a file only this

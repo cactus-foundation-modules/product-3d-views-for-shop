@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
-import { buildKey, isS3Provider, workerUrl } from '@/lib/media/upload'
+import { isS3Provider, workerUrl } from '@/lib/media/upload'
 import { resolveFolderPath } from '@/lib/media/organise'
 import { signUploadToken, UPLOAD_TOKEN_TTL_MS } from '@/lib/media/upload-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
 import { isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { resolve3dFolderId } from '@/modules/product-3d-views-for-shop/lib/media-folder'
+import { buildModelKey } from '@/modules/product-3d-views-for-shop/lib/model-key'
 import { formatFromFilename, mimeForFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
 // Hand the browser a signed target so it can PUT a model straight to the media
@@ -62,7 +63,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const folderId = await resolve3dFolderId(id)
   const folderPath = folderId ? await resolveFolderPath(folderId) : ''
-  const key = buildKey(provider, mimeForFormat(format), filename, folderPath || undefined)
+  // Named after the parent product, the way the shop names its product images -
+  // see lib/model-key.ts. Chosen here rather than tidied up afterwards because the
+  // key is what the upload token signs.
+  const { key } = await buildModelKey({
+    provider,
+    mimeType: mimeForFormat(format),
+    filename,
+    folderPath: folderPath || undefined,
+    parentProductId: id,
+  })
   const { token } = signUploadToken(key, UPLOAD_TOKEN_TTL_MS)
 
   return NextResponse.json({
