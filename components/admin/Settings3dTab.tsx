@@ -1,7 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { P3D_CONFIG_DEFAULTS, type P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
+// config-shared, not config: this is a client component, and `lib/config` imports
+// prisma. A value import (P3D_CONFIG_DEFAULTS) from there puts the Prisma client
+// in the browser bundle, where its module-scope extension throws and takes the
+// whole admin Settings page down.
+import { P3D_CONFIG_DEFAULTS, type P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config-shared'
 
 // The 3D Viewer sub-tab, hosted inside shop's settings tab via the
 // 'shop.settings-sub-tabs' slot (manifest `host`). Shop gives it the space and
