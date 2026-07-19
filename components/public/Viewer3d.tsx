@@ -35,6 +35,14 @@ type CarriedView = {
   pivotY: number
   touched: boolean
   moved: boolean
+  // Whether the idle turn was actually running when the old viewer was torn
+  // down. This, not `touched`, is what the next build resumes: a shopper who
+  // stopped the spin and then pressed Reset view asked for the turn back by
+  // name, and an option change must not quietly overrule them. `touched` keeps
+  // its own job (never re-showing the drag hint) - the two questions parted
+  // company the moment Reset could restart the motion without clearing the
+  // hint latch.
+  spinning: boolean
   // When it was captured. A carry is only honoured moments after the capture -
   // the dispose-then-rebuild of an option change - so a client-side navigation
   // to a different product minutes later opens at the opening framing, not
@@ -281,16 +289,18 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // shopper's own hand, and motion they cause is theirs to cause.
         const wantsMotion =
           settings.autoRotate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-        // A shopper who took hold of the previous model has taken hold of this one
-        // too: an option change swapping the model must not restart the idle turn
-        // they already stopped.
-        controls.autoRotate = wantsMotion && !spinMode && !carried?.touched
+        // An option change resumes whatever the idle motion was DOING when the
+        // old viewer went: still spinning (never touched, or touched then Reset)
+        // carries on; stopped stays stopped. Keyed on the carry's `spinning`,
+        // not `touched` - a shopper who pressed Reset view asked for the turn
+        // back, and swapping a headrest is no reason to take it away again.
+        controls.autoRotate = wantsMotion && !spinMode && (carried ? carried.spinning : true)
         controls.autoRotateSpeed = settings.autoRotateSpeed
         // Per-frame turn for the model-spin path, matched to OrbitControls' own
         // auto-rotation step so both modes read at the same speed for a given
         // autoRotateSpeed.
         const spinStep = ((2 * Math.PI) / 60 / 60) * settings.autoRotateSpeed
-        let idleSpin = wantsMotion && spinMode && !carried?.touched
+        let idleSpin = wantsMotion && spinMode && (carried ? carried.spinning : true)
         // Plain booleans shadowing the touched/moved state, because dispose() below
         // captures the view for the NEXT build and React state read from this
         // closure would be frozen at its mount-time value.
@@ -442,6 +452,10 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
             pivotY: pivot.rotation.y,
             touched: latchTouched,
             moved: latchMoved,
+            // Either mode's idle motion counts; a drag mid-flight has already
+            // set both to false, so a shopper holding the model as the swap
+            // lands does not get it snatched into a spin.
+            spinning: controls.autoRotate || idleSpin,
             at: performance.now(),
           }
           if (frame !== null) cancelAnimationFrame(frame)
