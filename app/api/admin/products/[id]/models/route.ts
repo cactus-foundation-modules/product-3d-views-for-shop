@@ -4,6 +4,7 @@ import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/
 import { resolveFolderPath } from '@/lib/media/organise'
 import { saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
 import { verifyUploadToken } from '@/lib/media/upload-token'
+import { signAssetUrl } from '@/lib/media/asset-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
 import { createModel, getAdminModels, getProductOptions, getTargets, isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { resolve3dFolderId } from '@/modules/product-3d-views-for-shop/lib/media-folder'
@@ -139,7 +140,10 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
       format,
       size: sizeBytes,
     })
-    return NextResponse.json(model, { status: 201 })
+    // Signed on the way back, like every other model url the editor is handed:
+    // it may be dropped straight into a preview viewer, which fetches it from the
+    // Worker and would be refused without a token.
+    return NextResponse.json({ ...model, url: signAssetUrl(model.url) }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
       { error: `Could not save that model: ${error instanceof Error ? error.message : 'Unknown error'}` },
@@ -208,7 +212,10 @@ async function attachExisting(body: Record<string, unknown>, id: string) {
       format,
       size: media.sizeBytes,
     })
-    return NextResponse.json(model, { status: 201 })
+    // Signed on the way back, like every other model url the editor is handed:
+    // it may be dropped straight into a preview viewer, which fetches it from the
+    // Worker and would be refused without a token.
+    return NextResponse.json({ ...model, url: signAssetUrl(model.url) }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
       { error: `Could not add that model: ${error instanceof Error ? error.message : 'Unknown error'}` },
@@ -293,7 +300,10 @@ async function uploadThroughServer(request: NextRequest, id: string, provider: P
       format,
       size: result.sizeBytes,
     })
-    return NextResponse.json(model, { status: 201 })
+    // Signed on the way back, like every other model url the editor is handed:
+    // it may be dropped straight into a preview viewer, which fetches it from the
+    // Worker and would be refused without a token.
+    return NextResponse.json({ ...model, url: signAssetUrl(model.url) }, { status: 201 })
   } catch (error) {
     return NextResponse.json(
       { error: `Upload failed: ${error instanceof Error ? error.message : 'Unknown error'}` },

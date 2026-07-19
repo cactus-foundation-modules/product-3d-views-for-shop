@@ -1,3 +1,4 @@
+import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
@@ -51,7 +52,12 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
         // meaningless to shop, which only ever passes it back to us.
         key: m.id,
         productId: m.productId,
-        url: m.url,
+        // Signed on the way out, never in the database. This payload is embedded
+        // in the page's HTML, so the url is readable by anyone who views source -
+        // that is unavoidable for a viewer that has to fetch the file. The token
+        // is what stops a copied one being useful a week later, or working at all
+        // from someone else's site. See lib/media/asset-token.ts.
+        url: signAssetUrl(m.url),
         format: m.format,
         label: `${formatLabel(m.format)} model`,
       })),

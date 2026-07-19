@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/prisma'
+import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { MANUAL_SIZE_ID, attributeColourId, parseHexColour, readColourSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
@@ -170,7 +171,11 @@ export function composeFabricBundle(
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
 
-  return { modelId: model.id, modelUrl: model.url, format: model.format, slots }
+  // Signed here as well as in the gallery payload, because this bundle reaches the
+  // browser by a second road: the public /fabric/<child> endpoint, which hands out
+  // a model url to anyone who asks. Same treatment, same reasoning - the token is
+  // stamped on the way out and the stored row keeps the plain url.
+  return { modelId: model.id, modelUrl: signAssetUrl(model.url), format: model.format, slots }
 }
 
 /**

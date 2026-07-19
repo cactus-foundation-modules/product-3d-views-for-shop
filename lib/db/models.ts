@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { deleteMedia } from '@/lib/media/upload'
+import { signAssetUrl } from '@/lib/media/asset-token'
 import type { MediaProviderType } from '@prisma/client'
 import type { P3dAdminModel, P3dModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -183,7 +184,11 @@ export async function getModelsForProductTree(productId: string): Promise<P3dMod
 /** The editor's list: every model for the product tree, each named by its target. */
 export async function getAdminModels(productId: string): Promise<P3dAdminModel[]> {
   const [models, labels] = await Promise.all([getModelsForProductTree(productId), getVariationLabels(productId)])
-  return models.map((m) => ({ ...m, variationLabel: labels.get(m.productId) ?? null }))
+  // Signed like the storefront's, and for a duller reason than protection: the
+  // editor loads these models into a viewer in the browser exactly as a shopper's
+  // page does, so an unsigned url here would simply be refused by the Worker and
+  // the admin would get an empty preview.
+  return models.map((m) => ({ ...m, url: signAssetUrl(m.url), variationLabel: labels.get(m.productId) ?? null }))
 }
 
 export async function getModelById(id: string): Promise<P3dModel | null> {
