@@ -38,6 +38,37 @@ const DEFAULT_LIGHTING: P3dLighting = {
 // the result so concurrent callers share one parse rather than racing.
 const cache = new Map<string, Promise<Object3D>>()
 
+// Where app/api/draco/[file]/route.ts serves this module's copy of the Draco decoder.
+// Same-origin and relative, so it follows the site wherever it is deployed and needs no
+// env var; see assets/draco/README.md for why the decoder is a fetched file rather than
+// an import.
+const DRACO_DECODER_PATH = '/api/m/product-3d-views-for-shop/draco/'
+
+// One DRACOLoader for the page, built on first use and never disposed.
+//
+// It is worth sharing rather than making per parse: each instance keeps its own pool of
+// Web Workers, each with its own compiled copy of the wasm decoder, so a product whose
+// variations are all Draco files would otherwise stand up a fresh pool per model and
+// leave the old ones running. three's own guidance is the same - "create one DRACOLoader
+// instance and reuse it".
+//
+// Held as the PROMISE, matching the caches above, so two models parsing at once share
+// one decoder rather than racing to build two.
+type DracoLoader = InstanceType<
+  typeof import('three/examples/jsm/loaders/DRACOLoader.js')['DRACOLoader']
+>
+let dracoLoader: Promise<DracoLoader> | null = null
+
+async function getDracoLoader(): Promise<DracoLoader> {
+  if (!dracoLoader) {
+    dracoLoader = (async () => {
+      const { DRACOLoader } = await import('three/examples/jsm/loaders/DRACOLoader.js')
+      return new DRACOLoader().setDecoderPath(DRACO_DECODER_PATH)
+    })()
+  }
+  return dracoLoader
+}
+
 async function parse(url: string, format: P3dFormat): Promise<Object3D> {
   const model = await parseRaw(url, format)
   await normaliseMaterials(model, format)
@@ -65,6 +96,19 @@ async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
       const { MeshoptDecoder } = await import('three/examples/jsm/libs/meshopt_decoder.module.js')
       await MeshoptDecoder.ready
       loader.setMeshoptDecoder(MeshoptDecoder)
+      // KHR_draco_mesh_compression: the OTHER compression a glTF can arrive under, and
+      // by some distance the more common of the two - it is what Blender's exporter
+      // means by "Compression", what gltf-pipeline writes by default, and what most
+      // "optimise my GLB" tools produce. Like meshopt, GLTFLoader refuses a file using
+      // it outright when no decoder is registered ("No DRACOLoader instance provided"),
+      // which reached the admin as a model that simply never appeared.
+      //
+      // Unlike meshopt, the decoder is not bundled with three as a module - it is an
+      // Emscripten build this module ships in assets/draco and serves from its own
+      // route. Registered unconditionally because it costs nothing until a file
+      // actually uses the extension: DRACOLoader fetches its wasm lazily, on the first
+      // compressed primitive it meets, so an uncompressed GLB never asks for it.
+      loader.setDRACOLoader(await getDracoLoader())
       const gltf = await loader.loadAsync(url)
       // GLTFLoader hands the clips back BESIDE the scene, not on it, so returning
       // gltf.scene alone drops them and an animated file plays as a still. Parking
@@ -765,12 +809,23 @@ const environments = new WeakMap<WebGLRenderer, Texture>()
  * intensities and the environment's contribution are the site owner's, defaulting
  * to the values above.
  */
-export async function addLights(
+/**
+ * Point a scene at `renderer`'s studio environment, building it if this renderer has
+ * not got one yet.
+ *
+ * Split out of addLights for the one caller that needs the environment WITHOUT the
+ * lights: the thumbnail strip recovering from a lost WebGL context (see thumb-stage).
+ * A scene that outlives its renderer is still holding the dead renderer's environment
+ * texture, which is a GPU allocation on a context that no longer exists - so a
+ * recovered strip has to be re-pointed at the new renderer's, and adding a second set
+ * of lights while doing it would brighten every thumbnail that survived the loss.
+ */
+export async function applyEnvironment(
   scene: Scene,
   renderer: WebGLRenderer,
-  lighting: P3dLighting = DEFAULT_LIGHTING,
-): Promise<DirectionalLight> {
-  const { AmbientLight, DirectionalLight, PMREMGenerator } = await import('three')
+  environmentIntensity: number,
+): Promise<void> {
+  const { PMREMGenerator } = await import('three')
 
   let environment = environments.get(renderer)
   if (!environment) {
@@ -785,7 +840,17 @@ export async function addLights(
   // Scales the environment's contribution without rebuilding the PMREM texture,
   // so the cache above still holds and only this scalar changes per scene. This
   // is the dial that decides whether chrome reads as metal or as a black hole.
-  scene.environmentIntensity = lighting.environmentIntensity
+  scene.environmentIntensity = environmentIntensity
+}
+
+export async function addLights(
+  scene: Scene,
+  renderer: WebGLRenderer,
+  lighting: P3dLighting = DEFAULT_LIGHTING,
+): Promise<DirectionalLight> {
+  const { AmbientLight, DirectionalLight } = await import('three')
+
+  await applyEnvironment(scene, renderer, lighting.environmentIntensity)
 
   scene.add(new AmbientLight(0xffffff, lighting.ambientIntensity))
   const key = new DirectionalLight(0xffffff, lighting.keyLightIntensity)

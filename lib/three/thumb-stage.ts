@@ -1,7 +1,7 @@
 'use client'
 
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
-import { addLights, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, applyEnvironment, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 
@@ -33,10 +33,22 @@ type Entry = {
   pivot: Object3D
   /** What gets disposed, and what the pivot has to be emptied of first. */
   model: Object3D
+  /**
+   * Whether this thumbnail owes a frame. Always true while the strip is spinning, and
+   * the only thing that gets drawn when it is not: a still thumbnail is a picture that
+   * has already been painted into its own 2D canvas and stays there, so redrawing it
+   * sixty times a second produces the same image at full GPU cost. Set again whenever
+   * something invalidates it - a mount, or a renderer rebuilt after a context loss.
+   */
+  needsDraw: boolean
 }
 
 let renderer: WebGLRenderer | null = null
 let rendererFailed = false
+// Set the moment the shared context is lost and cleared once a replacement renderer is
+// standing. Nothing is drawn in between: rendering into a dead context is at best a
+// no-op and at worst a stream of console errors on every frame.
+let contextLost = false
 const entries = new Set<Entry>()
 let frame: number | null = null
 let lastTime = 0
@@ -62,6 +74,12 @@ function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
 }
 
+// How long to wait for the browser to volunteer a restored context before rebuilding
+// the renderer from scratch. Matches the stage viewer's own wait, and for the same
+// reason: most browsers fire 'webglcontextrestored', some quietly never do, and
+// rebuilding works either way.
+const CONTEXT_RESTORE_TIMEOUT_MS = 1500
+
 async function getRenderer(): Promise<WebGLRenderer | null> {
   if (renderer) return renderer
   // A machine with no working WebGL (an old box, a locked-down browser, a
@@ -72,6 +90,8 @@ async function getRenderer(): Promise<WebGLRenderer | null> {
     const { WebGLRenderer } = await import('three')
     renderer = new WebGLRenderer({ alpha: true, antialias: thumbSettings?.antialias ?? true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, thumbSettings?.pixelRatioCap ?? 2))
+    watchForContextLoss(renderer)
+    contextLost = false
     return renderer
   } catch {
     rendererFailed = true
@@ -79,32 +99,105 @@ async function getRenderer(): Promise<WebGLRenderer | null> {
   }
 }
 
+/**
+ * Surviving a lost WebGL context - the failure that takes the WHOLE strip out at once,
+ * since every thumbnail on the page is drawn through this one context.
+ *
+ * A context is not the page's to keep: a phone backgrounding the tab, a driver reset,
+ * or another tab opening enough contexts to push this one out will all take it. What
+ * the shopper is left with is a row of thumbnails frozen on whatever frame they last
+ * managed, for the rest of their visit.
+ *
+ * There is nothing to resume. A restored context hands back the ability to draw but not
+ * the geometry, textures or shaders that were uploaded to the dead one, so the honest
+ * answer is a new renderer - which also means a new canvas, and no inherited state to
+ * wonder about. Everything CPU-side survives (the scenes, the models, the texture
+ * images), so the new renderer simply uploads it all again the first time it draws each
+ * thumbnail. The one thing that does NOT survive is the studio environment, which was
+ * built against the old renderer and is keyed to it: each scene has to be re-pointed at
+ * the new one, or every metal surface in the strip goes black.
+ */
+function watchForContextLoss(target: WebGLRenderer): void {
+  const canvas = target.domElement
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const rebuild = (): void => {
+    if (timer !== null) { clearTimeout(timer); timer = null }
+    // Only ever rebuild the renderer that was lost. A teardown may have replaced or
+    // dropped it while the browser was thinking about restoring.
+    if (renderer !== target) return
+    disposeEnvironment(target)
+    target.dispose()
+    renderer = null
+    // A lost context is not a browser that cannot do WebGL, so the one-failure-settles-
+    // it latch must not be left set by this path.
+    rendererFailed = false
+
+    void getRenderer().then(async (active) => {
+      if (!active) return
+      for (const entry of entries) {
+        await applyEnvironment(entry.scene, active, thumbSettings?.environmentIntensity ?? 1)
+        entry.needsDraw = true
+      }
+      start()
+    })
+  }
+
+  canvas.addEventListener('webglcontextlost', (event) => {
+    // Without this the browser is entitled never to offer a restore at all.
+    event.preventDefault()
+    if (renderer !== target) return
+    contextLost = true
+    timer = setTimeout(rebuild, CONTEXT_RESTORE_TIMEOUT_MS)
+  })
+  canvas.addEventListener('webglcontextrestored', rebuild)
+}
+
 function tick(time: number): void {
   frame = null
   const delta = lastTime ? Math.min((time - lastTime) / 1000, 0.1) : 0
   lastTime = time
 
-  if (renderer && entries.size > 0) {
-    // Held still if the shopper asked their system for less motion, or if the
-    // site owner turned the thumbnail spin off. Either one is a "no".
-    const spinning = !prefersReducedMotion() && (thumbSettings?.thumbnailAutoRotate ?? true)
-    const spin = spinning ? SPIN_RATE * delta : 0
+  // Held still if the shopper asked their system for less motion, or if the
+  // site owner turned the thumbnail spin off. Either one is a "no".
+  const spinning = !prefersReducedMotion() && (thumbSettings?.thumbnailAutoRotate ?? true)
+  const spin = spinning ? SPIN_RATE * delta : 0
+  // Whether anything still owes a frame it has not been able to draw yet, which is what
+  // keeps the loop alive on a strip that is not spinning.
+  let pending = false
+
+  if (renderer && !contextLost) {
     for (const entry of entries) {
       // A thumbnail scrolled out of the viewport is still being drawn without
       // this check, which on a long category page is a lot of GPU spent on
       // pictures nobody is looking at.
-      if (!isVisible(entry.canvas)) continue
+      if (!isVisible(entry.canvas)) {
+        // One that has never been drawn still owes its first frame, for whenever it
+        // scrolls in. One already drawn owes nothing: its 2D canvas is still holding
+        // the picture.
+        pending ||= entry.needsDraw
+        continue
+      }
+      // A still strip - reduced motion, or the owner's own choice - draws each
+      // thumbnail once and then leaves it alone. Redrawing an unchanging picture sixty
+      // times a second is a phone's battery spent on nothing whatsoever.
+      if (spin === 0 && !entry.needsDraw) continue
       entry.pivot.rotation.y += spin
       const { width, height } = entry.canvas
-      if (width === 0 || height === 0) continue
+      if (width === 0 || height === 0) { pending = true; continue }
       renderer.setSize(width, height, false)
       renderer.render(entry.scene, entry.camera)
       entry.ctx.clearRect(0, 0, width, height)
       entry.ctx.drawImage(renderer.domElement, 0, 0, width, height)
+      entry.needsDraw = false
     }
+  } else if (entries.size > 0) {
+    // No renderer yet, or waiting on a context to come back: everything still owes a
+    // frame, so keep the loop turning until there is something to draw with.
+    pending = true
   }
 
-  if (entries.size > 0) frame = requestAnimationFrame(tick)
+  if (entries.size > 0 && (spin > 0 || pending)) frame = requestAnimationFrame(tick)
   else lastTime = 0
 }
 
@@ -163,7 +256,7 @@ export async function mountThumb(
   camera.position.set(0, 0.6, 4)
   camera.lookAt(0, 0, 0)
 
-  const entry: Entry = { canvas, ctx, scene, camera, pivot, model }
+  const entry: Entry = { canvas, ctx, scene, camera, pivot, model, needsDraw: true }
   entries.add(entry)
   start()
 

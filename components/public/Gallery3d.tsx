@@ -32,6 +32,17 @@ const css = `
 .p3d-stage{width:100%;height:100%;position:relative;background:var(--color-bg-subtle)}
 .p3d-stage-canvas{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
 .p3d-stage-canvas:active{cursor:grabbing}
+/* The canvas takes keyboard focus (arrow keys turn the model), so it has to show it.
+   Inset, because the canvas fills the stage exactly and an outward ring would be
+   clipped by whatever the theme wraps the gallery in. */
+.p3d-stage-canvas:focus-visible{outline:2px solid var(--color-border-focus);outline-offset:-2px}
+/* Which hint shows is :focus-visible's to decide, not JavaScript's: it is the only
+   thing that knows whether the focus arrived by keyboard or by a mouse click, and
+   telling someone mid-drag to try the arrow keys would be worse than saying nothing.
+   Sibling selectors, so the hints have to stay after the canvas in the markup. */
+.p3d-hint-keys{display:none}
+.p3d-stage-canvas:focus-visible ~ .p3d-hint-keys{display:block}
+.p3d-stage-canvas:focus-visible ~ .p3d-hint-drag{display:none}
 .p3d-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   text-align:center;padding:1rem;font-size:.8125rem;color:var(--color-text-muted)}
 .p3d-hint{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:1;pointer-events:none;
