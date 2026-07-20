@@ -26,7 +26,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { P3D_ACCEPT, formatFromFilename, formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
+import { ModelUploadCancelled, uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
+import { useModelClashPrompt } from '@/modules/product-3d-views-for-shop/components/admin/useModelClashPrompt'
 
 type MediaItem = { id: string; url: string; key: string; originalName: string | null; sizeBytes: number }
 
@@ -57,6 +58,7 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
   const [picked, setPicked] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const clashPrompt = useModelClashPrompt()
   const [folders, setFolders] = useState<Folder[]>([])
   // null = library root; undefined = still asking where to open.
   const [folderId, setFolderId] = useState<string | null | undefined>(undefined)
@@ -155,10 +157,13 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
     setBusy(true)
     setError(null)
     try {
-      await uploadModel(file, { productId, targetProductId })
+      await uploadModel(file, { productId, targetProductId, onClash: clashPrompt.ask })
       onChanged()
       onClose()
     } catch (err) {
+      // Cancelling at the name prompt leaves the dialogue open and says nothing -
+      // the person just changed their mind, which is not an error.
+      if (err instanceof ModelUploadCancelled) { setBusy(false); return }
       setError(err instanceof Error ? err.message : 'That model would not upload.')
       setBusy(false)
     }
@@ -167,6 +172,10 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
   const crumbStyle = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '0.8125rem', color: 'var(--color-primary)', fontFamily: 'inherit' } as const
 
   return (
+    <>
+    {/* Sits above this dialogue - the question is about the file being uploaded
+        from inside it, so it has to be answerable without closing it. */}
+    {clashPrompt.dialog}
     <div
       style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'var(--color-overlay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
@@ -302,5 +311,6 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
         </div>
       </div>
     </div>
+    </>
   )
 }

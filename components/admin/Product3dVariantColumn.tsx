@@ -22,9 +22,10 @@
 
 import { useState, type CSSProperties, type DragEvent } from 'react'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
+import { ModelUploadCancelled, uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
 import { reloadProductModels, useProductModels } from '@/modules/product-3d-views-for-shop/lib/use-product-models'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
+import { useModelClashPrompt } from '@/modules/product-3d-views-for-shop/components/admin/useModelClashPrompt'
 
 const box: CSSProperties = {
   width: 36, height: 36, borderRadius: 'var(--radius-md)',
@@ -50,6 +51,7 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
   const [uploading, setUploading] = useState(false)
   const [picking, setPicking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const clashPrompt = useModelClashPrompt()
 
   const mine = (models ?? []).filter((m) => m.productId === childProductId)
 
@@ -57,9 +59,12 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
     setError(null)
     setUploading(true)
     try {
-      await uploadModel(file, { productId, targetProductId: childProductId })
+      await uploadModel(file, { productId, targetProductId: childProductId, onClash: clashPrompt.ask })
       await reloadProductModels(productId)
     } catch (err) {
+      // Cancelling is a decision, not a failure - saying "upload failed" for it
+      // would read as something having gone wrong.
+      if (err instanceof ModelUploadCancelled) return
       setError(err instanceof Error ? err.message : 'That model would not upload.')
     } finally {
       setUploading(false)
@@ -87,6 +92,7 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
 
   return (
     <>
+    {clashPrompt.dialog}
     <span
       onDragEnter={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragOver(true) } }}
       onDragOver={(e) => { if (isFileDrag(e)) { e.preventDefault(); setDragOver(true) } }}

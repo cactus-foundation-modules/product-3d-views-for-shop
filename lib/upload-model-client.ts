@@ -31,7 +31,22 @@ async function reasonFrom(res: Response, fallback: string): Promise<string> {
 
 type Ticket =
   | { available: true; uploadUrl: string; contentType: string; key: string; token: string }
+  | { available: true; clash: { existingName: string; suggestedName: string } }
   | { available: false }
+
+/** What to do about a model whose name is already taken in the product's folder. */
+export type ModelClashChoice = 'replace' | 'suffix' | 'cancel'
+
+/** Asked when the name is taken. Returning 'cancel' abandons the upload quietly. */
+export type ModelClashAsk = (info: { existingName: string; suggestedName: string }) => Promise<ModelClashChoice>
+
+/** Thrown when the answer was 'cancel', so callers can tell it from a failure. */
+export class ModelUploadCancelled extends Error {
+  constructor() {
+    super('Upload cancelled')
+    this.name = 'ModelUploadCancelled'
+  }
+}
 
 /**
  * Check the file the same way the server will, so a wrong type or an oversized
@@ -50,20 +65,34 @@ export function preflightModelError(file: File): string | null {
 
 export async function uploadModel(
   file: File,
-  { productId, targetProductId }: { productId: string; targetProductId: string },
+  { productId, targetProductId, onClash }: { productId: string; targetProductId: string; onClash?: ModelClashAsk },
 ): Promise<P3dAdminModel> {
   const reason = preflightModelError(file)
   if (reason) throw new Error(reason)
 
   const base = `/api/m/product-3d-views-for-shop/admin/products/${productId}/models`
 
-  const ticketRes = await fetch(`${base}/upload-url`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ filename: file.name, targetProductId }),
-  })
-  if (!ticketRes.ok) throw new Error(await reasonFrom(ticketRes, 'That model could not be uploaded.'))
-  const ticket: Ticket = await ticketRes.json()
+  const askFor = async (clashChoice?: ModelClashChoice): Promise<Ticket> => {
+    const res = await fetch(`${base}/upload-url`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, targetProductId, ...(clashChoice ? { onClash: clashChoice } : {}) }),
+    })
+    if (!res.ok) throw new Error(await reasonFrom(res, 'That model could not be uploaded.'))
+    return res.json()
+  }
+
+  let ticket = await askFor()
+
+  // The name is taken. Nothing has been signed and nothing has been sent, so the
+  // answer decides which key the second request asks for. A caller that offers no
+  // way to ask keeps the old behaviour and files the model beside the other one.
+  if (ticket.available && 'clash' in ticket) {
+    const choice = onClash ? await onClash(ticket.clash) : 'suffix'
+    if (choice === 'cancel') throw new ModelUploadCancelled()
+    ticket = await askFor(choice)
+    if (ticket.available && 'clash' in ticket) throw new Error('That model could not be uploaded.')
+  }
 
   if (!ticket.available) return uploadThroughServer(file, base, targetProductId)
 

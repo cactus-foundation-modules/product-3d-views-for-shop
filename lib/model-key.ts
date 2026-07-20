@@ -50,6 +50,13 @@ export type ModelKeyPlan = {
    */
   nameForKey: string
   exactName: boolean
+  /**
+   * Set when the name this model wanted was already spoken for. `key` above is
+   * then the free "-2" alternative; this is the item sitting on the original, so
+   * the caller can offer to overwrite it instead of quietly filing a near-twin
+   * beside it. Null when the preferred name was free.
+   */
+  taken: { mediaId: string; key: string; name: string } | null
 }
 
 export async function buildModelKey({
@@ -69,24 +76,37 @@ export async function buildModelKey({
     key: buildKey(provider, mimeType, nameForKey, folderPath, exactName),
     nameForKey,
     exactName,
+    taken: null,
   })
-  // The nanoid form carries its own uniqueness, so it is always a safe answer.
-  const fallback = () => plan(filename, false)
+  // The nanoid form carries its own uniqueness, so it is always a safe answer -
+  // and the only one left when the upload arrives with no usable name at all.
+  // Nothing else reaches for it: a file called after a random id is exactly the
+  // unrecognisable thing this module exists to avoid.
+  const base = stripExtension(filename).trim()
+  if (!base) return plan(filename, false)
 
   const product = await getProductById(parentProductId)
   const slug = product?.slug ? sanitiseSlug(product.slug) : ''
-  const base = stripExtension(filename).trim()
-  if (!slug || !base) return fallback()
 
   // Don't say the product's name twice when the uploaded file already leads with
-  // it - "oslo-desks-oslo-desks-120cm.glb" helps nobody.
+  // it - "oslo-desks-oslo-desks-120cm.glb" helps nobody. A product whose slug
+  // cannot be read (deleted mid-upload, say) still gets the name it was given.
   const lower = base.toLowerCase()
-  const named = lower === slug || lower.startsWith(`${slug}-`) ? base : `${slug}-${base}`
+  const named = !slug || lower === slug || lower.startsWith(`${slug}-`) ? base : `${slug}-${base}`
 
-  for (let attempt = 1; attempt <= MAX_DISAMBIGUATION; attempt++) {
-    const candidate = plan(attempt === 1 ? named : `${named}-${attempt}`, true)
-    const taken = await prisma.media.findFirst({ where: { key: candidate.key }, select: { id: true } })
-    if (!taken) return candidate
+  const first = plan(named, true)
+  const clash = await prisma.media.findFirst({ where: { key: first.key }, select: { id: true, originalName: true } })
+  if (!clash) return first
+
+  const taken = {
+    mediaId: clash.id,
+    key: first.key,
+    name: clash.originalName ?? first.key.slice(first.key.lastIndexOf('/') + 1),
   }
-  return fallback()
+  for (let attempt = 2; attempt <= MAX_DISAMBIGUATION; attempt++) {
+    const candidate = plan(`${named}-${attempt}`, true)
+    const occupied = await prisma.media.findFirst({ where: { key: candidate.key }, select: { id: true } })
+    if (!occupied) return { ...candidate, taken }
+  }
+  return { ...plan(filename, false), taken }
 }

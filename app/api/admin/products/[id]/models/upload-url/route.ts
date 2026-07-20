@@ -39,6 +39,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const filename = typeof body?.filename === 'string' ? body.filename : ''
   const rawTarget = body?.targetProductId
   const targetProductId = typeof rawTarget === 'string' && rawTarget ? rawTarget : id
+  // What to do if this model's name is already taken, once the editor has asked.
+  // Absent on the first attempt, which is what makes the clash reportable at all.
+  const onClash = typeof body?.onClash === 'string' ? body.onClash : ''
 
   // The parent's own tree is the only place a model may be attached. Checked here
   // as well as at record time: no reason to sign a key for an upload that will be
@@ -66,13 +69,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // Named after the parent product, the way the shop names its product images -
   // see lib/model-key.ts. Chosen here rather than tidied up afterwards because the
   // key is what the upload token signs.
-  const { key } = await buildModelKey({
+  const plan = await buildModelKey({
     provider,
     mimeType: mimeForFormat(format),
     filename,
     folderPath: folderPath || undefined,
     parentProductId: id,
   })
+
+  // The name is already in use and the browser has not said what to do about it.
+  // Neither answer is safe to assume - overwriting loses a file, and suffixing
+  // leaves two near-identical models nobody asked for - so no key is signed and
+  // no bytes move until the editor asks.
+  if (plan.taken && onClash !== 'replace' && onClash !== 'suffix') {
+    return NextResponse.json({
+      available: true,
+      clash: {
+        existingName: plan.taken.name,
+        suggestedName: plan.key.slice(plan.key.lastIndexOf('/') + 1),
+      },
+    })
+  }
+
+  // 'replace' aims the upload at the object already there, so the bytes take over
+  // that library row rather than starting a second one beside it.
+  const key = plan.taken && onClash === 'replace' ? plan.taken.key : plan.key
   const { token } = signUploadToken(key, UPLOAD_TOKEN_TTL_MS)
 
   return NextResponse.json({

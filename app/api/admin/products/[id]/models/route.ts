@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
 import { resolveFolderPath } from '@/lib/media/organise'
-import { saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
+import { adoptReplacementBlob, saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
 import { verifyUploadToken } from '@/lib/media/upload-token'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
@@ -117,16 +117,23 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
     // path is already baked into the signed key, so re-deriving it is what keeps
     // the library row and the object in the same place.
     const folderId = await resolve3dFolderId(id)
-    const record = await saveMediaRecord({
-      key,
-      url: '', // saveMediaRecord rebuilds the Worker url for proxied providers
-      provider,
-      mimeType: mimeForFormat(format),
-      sizeBytes,
-      uploadedById: userId,
-      originalName: filename || undefined,
-      folderId,
-    })
+    // A key that already has a library row means the uploader chose "replace" when
+    // told the name was taken. The bytes have landed on that object, so the row
+    // moves onto them - it keeps its id and url, and everything already pointing
+    // at it picks up the new model rather than being stranded on the old one.
+    const existing = await prisma.media.findUnique({ where: { key } })
+    const record = existing
+      ? await adoptReplacementBlob(existing, key, mimeForFormat(format), sizeBytes, existing.originalName)
+      : await saveMediaRecord({
+          key,
+          url: '', // saveMediaRecord rebuilds the Worker url for proxied providers
+          provider,
+          mimeType: mimeForFormat(format),
+          sizeBytes,
+          uploadedById: userId,
+          originalName: filename || undefined,
+          folderId,
+        })
 
     const model = await createModel({
       productId: targetProductId,
@@ -135,8 +142,9 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
       mediaKey: key,
       mediaId: record.id,
       // These bytes arrived because of this row, so removing the row may take
-      // them away again.
-      ownsMedia: true,
+      // them away again - unless they took over a library item that was already
+      // there, which is the site owner's file and not ours to delete.
+      ownsMedia: !existing,
       filename: filename || key.split('/').pop() || `model.${format}`,
       format,
       size: sizeBytes,
