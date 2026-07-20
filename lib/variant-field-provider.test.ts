@@ -112,3 +112,37 @@ describe('product3dVariantFieldProvider import batching', () => {
     expect(createModel).not.toHaveBeenCalled()
   })
 })
+
+describe('product3dVariantFieldProvider.rowChanged (preview, read-only)', () => {
+  it('is true when a url would be attached', async () => {
+    const ctx = new Map<string, P3dModel[]>([['child', [model('child', 'keep.glb')]]])
+    expect(await provider.rowChanged!('parent', 'child', { [COL]: 'keep.glb|add.glb' }, ctx)).toBe(true)
+  })
+
+  it('is true when a url would be dropped', async () => {
+    const ctx = new Map<string, P3dModel[]>([['child', [model('child', 'keep.glb'), model('child', 'drop.glb')]]])
+    expect(await provider.rowChanged!('parent', 'child', { [COL]: 'keep.glb' }, ctx)).toBe(true)
+  })
+
+  it('is false when the cell already matches what is stored', async () => {
+    const ctx = new Map<string, P3dModel[]>([['child', [model('child', 'a.glb'), model('child', 'b.glb')]]])
+    expect(await provider.rowChanged!('parent', 'child', { [COL]: 'a.glb|b.glb' }, ctx)).toBe(false)
+  })
+
+  it('is false when the sheet lacks the column', async () => {
+    const ctx = new Map<string, P3dModel[]>([['child', [model('child', 'a.glb')]]])
+    expect(await provider.rowChanged!('parent', 'child', { 'Other': 'x' }, ctx)).toBe(false)
+  })
+
+  it('ignores a non-3D url (nothing to render, not a change)', async () => {
+    const ctx = new Map<string, P3dModel[]>([['child', []]])
+    expect(await provider.rowChanged!('parent', 'child', { [COL]: 'notes.txt' }, ctx)).toBe(false)
+  })
+
+  it('writes nothing while deciding', async () => {
+    const ctx = new Map<string, P3dModel[]>([['child', [model('child', 'keep.glb')]]])
+    await provider.rowChanged!('parent', 'child', { [COL]: 'keep.glb|add.glb' }, ctx)
+    expect(createModel).not.toHaveBeenCalled()
+    expect(deleteModelCascade).not.toHaveBeenCalled()
+  })
+})

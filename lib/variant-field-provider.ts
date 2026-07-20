@@ -50,6 +50,58 @@ export function resolveCurrentModels(ctx: unknown, childProductId: string): P3dM
   return (ctx.get(childProductId) as P3dModel[] | undefined) ?? []
 }
 
+type RowPlan = {
+  /** Models the sheet still lists, kept as-is. */
+  keep: P3dModel[]
+  /** Urls to attach, with the filename and format derived for each. */
+  toAttach: Array<{ url: string; filename: string; format: NonNullable<ReturnType<typeof formatFromFilename>> }>
+  /** Models whose url has left the cell. */
+  toDelete: P3dModel[]
+}
+
+// What this row would do to a variant's models, decided without writing anything.
+// Both applyImportedRow and rowChanged run it, so the preview's count and the
+// import's effect cannot drift apart. Returns null when the sheet does not carry
+// the column at all - a sheet made before this column existed must never wipe a
+// variant's models, and must not be counted as a change either.
+async function planRow(childProductId: string, row: Record<string, string>, ctx?: unknown): Promise<RowPlan | null> {
+  // The row is keyed by header label; find ours case-insensitively.
+  const entry = Object.entries(row).find(([k]) => k.trim().toLowerCase() === COLUMN_LABEL.toLowerCase())
+  if (!entry) return null
+  const wanted = new Set(
+    (entry[1] ?? '')
+      .split(CELL_SEPARATOR)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
+
+  // Current models from the preloaded context. A context miss - no context, or a
+  // child not in the snapshot (a variant created mid-import) - means no current
+  // models, so a brand-new variant still gets its urls attached. Only when there
+  // is no context at all do we fall back to the per-row read (a caller without
+  // beginImport), preserving the old behaviour.
+  const preloaded = resolveCurrentModels(ctx, childProductId)
+  const current = preloaded ?? (await getModelsForProducts([childProductId]))
+  const currentUrls = new Set(current.map((m) => m.url))
+
+  const toAttach: RowPlan['toAttach'] = []
+  for (const url of wanted) {
+    if (currentUrls.has(url)) continue
+    const filename = filenameFromUrl(url)
+    const format = formatFromFilename(filename)
+    // A url whose extension is not a 3D format is skipped: there is nothing to
+    // render from it, so it is not a change either.
+    if (!format) continue
+    toAttach.push({ url, filename, format })
+  }
+
+  return {
+    keep: current.filter((m) => wanted.has(m.url)),
+    toAttach,
+    toDelete: current.filter((m) => !wanted.has(m.url)),
+  }
+}
+
 export const product3dVariantFieldProvider = {
   // Always one column: unlike attributes, whose columns depend on the product, any
   // variant can have a 3D file, so the column is offered on every product. A
@@ -85,48 +137,34 @@ export const product3dVariantFieldProvider = {
   },
 
   async applyImportedRow(_productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
-    // The row is keyed by header label; find ours case-insensitively, and do
-    // nothing at all when the sheet does not carry the column (so a sheet made
-    // before this column existed never wipes a variant's models).
-    const entry = Object.entries(row).find(([k]) => k.trim().toLowerCase() === COLUMN_LABEL.toLowerCase())
-    if (!entry) return
-    const wanted = new Set(
-      (entry[1] ?? '')
-        .split(CELL_SEPARATOR)
-        .map((s) => s.trim())
-        .filter(Boolean),
-    )
+    const plan = await planRow(childProductId, row, ctx)
+    if (!plan) return
 
-    // Current models from the preloaded context. A context miss - no context, or a
-    // child not in the snapshot (a variant created mid-import) - means no current
-    // models, so a brand-new variant still gets its urls attached. Only when there
-    // is no context at all do we fall back to the per-row read (a caller without
-    // beginImport), preserving the old behaviour.
-    const preloaded = resolveCurrentModels(ctx, childProductId)
-    const current = preloaded ?? (await getModelsForProducts([childProductId]))
-    const currentUrls = new Set(current.map((m) => m.url))
     // What this variant's models become, so the context stays correct if the same
     // child appears again (a duplicated combination) later in the import.
-    const next = current.filter((m) => wanted.has(m.url))
+    const next = plan.keep
 
     // Attach any wanted url not already on this variant. The stored file is not
     // copied - the row points at the url as given - so media keys stay null and
-    // its own delete never disturbs a blob it does not own. A url whose extension
-    // is not a 3D format is skipped: there is nothing to render from it.
-    for (const url of wanted) {
-      if (currentUrls.has(url)) continue
-      const filename = filenameFromUrl(url)
-      const format = formatFromFilename(filename)
-      if (!format) continue
+    // its own delete never disturbs a blob it does not own.
+    for (const { url, filename, format } of plan.toAttach) {
       next.push(await createModel({ productId: childProductId, url, mediaProvider: null, mediaKey: null, mediaId: null, filename, format, size: 0 }))
     }
 
     // Drop any model whose url the sheet no longer lists.
-    for (const model of current) {
-      if (!wanted.has(model.url)) await deleteModelCascade(model)
-    }
+    for (const model of plan.toDelete) await deleteModelCascade(model)
 
     if (ctx instanceof Map) ctx.set(childProductId, next)
+  },
+
+  // Read-only twin of applyImportedRow, for the import preview's change count.
+  // Same plan, nothing written - so a Pull that would swap a variant's 3D file is
+  // counted as an update instead of being reported as "nothing to do" and then
+  // quietly doing it anyway.
+  async rowChanged(_productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
+    const plan = await planRow(childProductId, row, ctx)
+    if (!plan) return false
+    return plan.toAttach.length > 0 || plan.toDelete.length > 0
   },
 
   Cell: Product3dVariantColumn,
