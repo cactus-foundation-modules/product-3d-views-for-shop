@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -216,6 +216,9 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
       if (cancelled) return
 
       const renderer = new WebGLRenderer({ canvas: canvas!, alpha: true, antialias: settings.antialias })
+      // Lend this context to the KTX2 transcoder's one-off capability check, so it does
+      // not open a WebGL context of its own to ask a question this one can answer.
+      warmKtx2Support(renderer)
       // pixelRatioCap caps DOWNWARD (never above the device's own ratio);
       // superSampling then multiplies UP, letting the viewer render above screen
       // resolution and downsample. That is what tames the fabric-weave shimmer a

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
 import { resolveFolderPath } from '@/lib/media/organise'
-import { adoptReplacementBlob, saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
+import { adoptReplacementBlob, autoOptimiseNewUpload, saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
 import { verifyUploadToken } from '@/lib/media/upload-token'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
@@ -135,6 +135,17 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
           folderId,
         })
 
+    // Compressed as it lands, so the first shopper to open this product gets the
+    // smaller file rather than whichever shopper happens to arrive after someone
+    // remembered to optimise it. Done BEFORE createModel so the size recorded
+    // here is the size the file actually is - core rewrites the library row's
+    // own size itself, but it cannot know about this table.
+    //
+    // The url and key are deliberately unaffected: an optimised GLB is written
+    // back over its own storage key precisely so that rows like this one, which
+    // core's reference rewriting never reaches, do not need to learn anything.
+    const storedSize = await autoOptimiseNewUpload(record.id, mimeForFormat(format), sizeBytes, userId)
+
     const model = await createModel({
       productId: targetProductId,
       url: record.url,
@@ -147,7 +158,7 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
       ownsMedia: !existing,
       filename: filename || key.split('/').pop() || `model.${format}`,
       format,
-      size: sizeBytes,
+      size: storedSize,
     })
     // Signed on the way back, like every other model url the editor is handed:
     // it may be dropped straight into a preview viewer, which fetches it from the
@@ -306,6 +317,13 @@ async function uploadThroughServer(request: NextRequest, id: string, provider: P
       folderId,
     })
 
+    // Same treatment as the direct-to-Worker path above: compressed on arrival,
+    // and only optimisable when there is a library row to optimise, since core
+    // works from the Media id.
+    const storedSize = record
+      ? await autoOptimiseNewUpload(record.id, result.mimeType, result.sizeBytes, userId)
+      : result.sizeBytes
+
     const model = await createModel({
       productId: targetProductId,
       url: result.url,
@@ -316,7 +334,7 @@ async function uploadThroughServer(request: NextRequest, id: string, provider: P
       ownsMedia: true,
       filename: file.name,
       format,
-      size: result.sizeBytes,
+      size: storedSize,
     })
     // Signed on the way back, like every other model url the editor is handed:
     // it may be dropped straight into a preview viewer, which fetches it from the

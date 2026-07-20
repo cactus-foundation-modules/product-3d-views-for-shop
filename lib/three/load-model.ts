@@ -38,11 +38,14 @@ const DEFAULT_LIGHTING: P3dLighting = {
 // the result so concurrent callers share one parse rather than racing.
 const cache = new Map<string, Promise<Object3D>>()
 
-// Where app/api/draco/[file]/route.ts serves this module's copy of the Draco decoder.
-// Same-origin and relative, so it follows the site wherever it is deployed and needs no
-// env var; see assets/draco/README.md for why the decoder is a fetched file rather than
-// an import.
-const DRACO_DECODER_PATH = '/api/m/product-3d-views-for-shop/draco/'
+// Where app/api/decoders/[file]/route.ts serves this module's copies of the Draco
+// decoder and the Basis Universal transcoder. Same-origin and relative, so it follows
+// the site wherever it is deployed and needs no env var; see assets/draco/README.md and
+// assets/basis/README.md for why these are fetched files rather than imports.
+//
+// One directory for both because their filenames do not collide and each loader asks
+// only for its own.
+const DECODER_PATH = '/api/m/product-3d-views-for-shop/decoders/'
 
 // One DRACOLoader for the page, built on first use and never disposed.
 //
@@ -63,10 +66,114 @@ async function getDracoLoader(): Promise<DracoLoader> {
   if (!dracoLoader) {
     dracoLoader = (async () => {
       const { DRACOLoader } = await import('three/examples/jsm/loaders/DRACOLoader.js')
-      return new DRACOLoader().setDecoderPath(DRACO_DECODER_PATH)
+      return new DRACOLoader().setDecoderPath(DECODER_PATH)
     })()
   }
   return dracoLoader
+}
+
+// One KTX2Loader for the page, on exactly the same terms as the DRACOLoader above: its
+// own Web Worker pool, its own compiled transcoder, shared rather than rebuilt per parse.
+type Ktx2Loader = InstanceType<
+  typeof import('three/examples/jsm/loaders/KTX2Loader.js')['KTX2Loader']
+>
+let ktx2Loader: Promise<Ktx2Loader> | null = null
+
+/**
+ * Build the KTX2 transcoder now, using this renderer for its capability check.
+ *
+ * Called by each viewer as it builds its renderer, and fire-and-forget: nothing waits on
+ * it and a failure is already swallowed by tryKtx2Loader.
+ *
+ * The point is to spend a renderer that already exists rather than one of our own. A
+ * WebGL context is a scarce per-page resource - browsers cap them at around sixteen and
+ * silently drop the OLDEST when a new one takes it over the line - so on a product page
+ * already holding a stage viewer and a thumbnail strip, opening another just to ask the
+ * GPU a question is how the strip ends up recovering from a context loss it never needed
+ * to have.
+ *
+ * Doing the work HERE rather than holding the renderer for later is the whole design.
+ * A viewer's renderer is disposed when it unmounts, and a stored reference would leave
+ * this file asking a dead context about its capabilities - or answering from one. The
+ * check is synchronous and runs while the renderer is demonstrably alive, and nothing is
+ * kept afterwards.
+ */
+export function warmKtx2Support(renderer: WebGLRenderer): void {
+  void tryKtx2Loader(renderer)
+}
+
+/**
+ * The KTX2 texture transcoder, built once per page.
+ *
+ * KHR_texture_basisu is the third compression a glTF can arrive under, and the only one
+ * of the three that compresses TEXTURES rather than geometry. Like Draco and meshopt
+ * before it, GLTFLoader refuses a file using it outright when no transcoder is
+ * registered ("THREE.GLTFLoader: setKTX2Loader must be called before loading KTX2
+ * textures"), which reaches the admin as a model that simply never appeared - the exact
+ * failure the other two decoders were wired up to stop.
+ *
+ * It is worth having even though nothing in Cactus writes KTX2 today: gltfpack, Blender's
+ * newer exporters and gltf-transform all produce it, so a site owner who optimises a
+ * model with their own tools before uploading it should get a model that works rather
+ * than a blank stage. And a KTX2 texture stays compressed ON THE GPU, which is a
+ * different saving from a smaller download: a 2048px map costs about 16 MB of video
+ * memory as PNG or JPEG whatever its file size, and a fraction of that as KTX2. On a
+ * phone that is the difference between a product page that renders and one that runs the
+ * tab out of memory.
+ *
+ * detectSupport needs a renderer only to ask the GPU which compressed formats it can
+ * take (ASTC, ETC, BC, and so on), so the transcoder knows what to transcode TO. A
+ * viewer passes its own (see warmKtx2Support); a caller with none - the background
+ * preload runs at idle, with no viewer necessarily mounted - gets a renderer built
+ * purely to ask, and disposed immediately. Every renderer on a page is on the same GPU,
+ * so the answer does not vary and is asked once.
+ */
+async function getKtx2Loader(probe?: WebGLRenderer): Promise<Ktx2Loader> {
+  if (!ktx2Loader) {
+    ktx2Loader = (async () => {
+      const { KTX2Loader } = await import('three/examples/jsm/loaders/KTX2Loader.js')
+      const { WebGLRenderer } = await import('three')
+      const loader = new KTX2Loader().setTranscoderPath(DECODER_PATH)
+
+      // Alive for one synchronous question, and only when the caller had none to lend.
+      const own = probe ? null : new WebGLRenderer()
+      try {
+        loader.detectSupport(probe ?? own!)
+      } finally {
+        // Only ours to dispose. Disposing a viewer's renderer here would take its
+        // canvas down with it.
+        own?.dispose()
+      }
+      return loader
+    })()
+  }
+  return ktx2Loader
+}
+
+/**
+ * The KTX2 transcoder, or null if one could not be built.
+ *
+ * Registering the transcoder must never be the thing that stops a model loading. Every
+ * step in getKtx2Loader can fail on a machine with no working WebGL at all - a locked
+ * down browser, a blocklisted driver, a headless environment - and an ordinary GLB, which
+ * is nearly all of them, has no KTX2 texture in it and does not care. Letting that
+ * failure through would turn "this device cannot do compressed textures" into "this
+ * device cannot open any 3D model", which is a far larger claim than the facts support.
+ *
+ * A file that genuinely does carry KTX2 textures still fails on such a device, with
+ * GLTFLoader's own message about the missing loader. That is the honest outcome: there is
+ * no rendering it there either way.
+ */
+async function tryKtx2Loader(probe?: WebGLRenderer): Promise<Ktx2Loader | null> {
+  try {
+    return await getKtx2Loader(probe)
+  } catch (error) {
+    console.warn('[product-3d-views] KTX2 textures are unavailable on this device:', error)
+    // Cleared so a later load can try again: the usual cause of a failed renderer is a
+    // context budget that was momentarily full, which is a passing condition.
+    ktx2Loader = null
+    return null
+  }
 }
 
 async function parse(url: string, format: P3dFormat): Promise<Object3D> {
@@ -75,7 +182,47 @@ async function parse(url: string, format: P3dFormat): Promise<Object3D> {
   return model
 }
 
+/**
+ * Fetch a model's bytes.
+ *
+ * Kicked off by parseRaw BEFORE it awaits its loader imports, which is the whole reason
+ * this is separate. The loaders' own `loadAsync(url)` does the two in series: the dynamic
+ * import of the loader chunk (and, for glTF, the meshopt decoder beside it) has to
+ * resolve before a single byte of the model is asked for. Those are independent waits -
+ * one is a script on our own origin, the other is a large file from the media Worker -
+ * and running them one after the other adds the whole of the first to the time before a
+ * shopper sees anything.
+ *
+ * Overlapping them costs nothing and is worth the most on exactly the connection that
+ * can least afford it: on a slow mobile link the loader chunk's round trip is dead time
+ * that the model download now fills.
+ *
+ * Deliberately a plain fetch rather than three's FileLoader, so nothing lands in three's
+ * own cache. This module keeps its own cache of PARSED models (see loadModel), which is
+ * the expensive half; a second copy of the raw bytes would be megabytes held for nothing.
+ */
+async function fetchModelBytes(url: string): Promise<ArrayBuffer> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    // Worth stating in full: a model url carries a signed token (see
+    // lib/media/asset-token.ts), so the interesting failure here is a 403 from an
+    // expired one, which is otherwise indistinguishable from a broken file.
+    throw new Error(`Could not fetch model (${response.status} ${response.statusText})`)
+  }
+  return response.arrayBuffer()
+}
+
 async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
+  // Started first, awaited last. See fetchModelBytes.
+  const bytes = fetchModelBytes(url)
+  // What a loader needs to resolve a file's relative references against - the directory
+  // the file itself sits in. loadAsync() derives this from the url on the caller's
+  // behalf; parse() has to be told, and a loader told nothing resolves against the page
+  // instead, which for a .gltf pointing at a sibling .bin is the difference between a
+  // model and a blank stage.
+  const { LoaderUtils } = await import('three')
+  const resourcePath = LoaderUtils.extractUrlBase(url)
+
   switch (format) {
     case 'glb':
     case 'gltf': {
@@ -109,7 +256,16 @@ async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
       // actually uses the extension: DRACOLoader fetches its wasm lazily, on the first
       // compressed primitive it meets, so an uncompressed GLB never asks for it.
       loader.setDRACOLoader(await getDracoLoader())
-      const gltf = await loader.loadAsync(url)
+      // KHR_texture_basisu: compressed textures. Registered unconditionally for the same
+      // reason as Draco - it costs nothing until a file actually carries one, since
+      // KTX2Loader fetches its transcoder lazily on the first compressed texture it
+      // meets, so an ordinary GLB never asks for it. See getKtx2Loader.
+      const ktx2 = await tryKtx2Loader()
+      if (ktx2) loader.setKTX2Loader(ktx2)
+      // parse(), not loadAsync(): the bytes were already on their way before any of the
+      // above was imported. The path argument is what loadAsync would have worked out
+      // for itself.
+      const gltf = await loader.parseAsync(await bytes, resourcePath)
       // GLTFLoader hands the clips back BESIDE the scene, not on it, so returning
       // gltf.scene alone drops them and an animated file plays as a still. Parking
       // them on the scene's own `animations` is what makes them survive the clone
@@ -127,15 +283,20 @@ async function parseRaw(url: string, format: P3dFormat): Promise<Object3D> {
       // carry is its `usemtl` names, which the loader keeps on the materials it
       // invents - so the fabric configurator's slots still work on an OBJ even
       // though nothing describes what those slots should look like.
-      return await new OBJLoader().loadAsync(url)
+      //
+      // An OBJ is text rather than binary, so the one decode the other formats do not
+      // need. UTF-8 because that is what OBJLoader's own FileLoader would have used.
+      return new OBJLoader().parse(new TextDecoder().decode(await bytes))
     }
     case 'fbx': {
       const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
-      return await new FBXLoader().loadAsync(url)
+      // FBXLoader reads both the binary and the ASCII flavour from the same buffer, so
+      // this needs no branch of its own.
+      return new FBXLoader().parse(await bytes, resourcePath)
     }
     case '3ds': {
       const { TDSLoader } = await import('three/examples/jsm/loaders/TDSLoader.js')
-      return await new TDSLoader().loadAsync(url)
+      return new TDSLoader().parse(await bytes, resourcePath)
     }
   }
 }

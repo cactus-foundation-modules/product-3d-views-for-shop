@@ -1,7 +1,7 @@
 'use client'
 
 import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
-import { addLights, applyEnvironment, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, applyEnvironment, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 
@@ -90,6 +90,9 @@ async function getRenderer(): Promise<WebGLRenderer | null> {
     const { WebGLRenderer } = await import('three')
     renderer = new WebGLRenderer({ alpha: true, antialias: thumbSettings?.antialias ?? true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, thumbSettings?.pixelRatioCap ?? 2))
+    // Lend this context to the KTX2 transcoder's one-off capability check, so it does
+    // not open a WebGL context of its own to ask a question this one can answer.
+    warmKtx2Support(renderer)
     watchForContextLoss(renderer)
     contextLost = false
     return renderer
