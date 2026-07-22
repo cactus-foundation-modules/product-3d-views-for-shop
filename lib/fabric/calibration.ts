@@ -8,6 +8,26 @@
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 
 /**
+ * The url a measurement is filed under: the model's own address, with any query
+ * string removed.
+ *
+ * The same file reaches the two sides of this by different roads. The admin panel is
+ * handed models by `getAdminModels`, which SIGNS every url on the way out (`?t=<expiry>.<token>`)
+ * so the browser is allowed to fetch and measure them; the storefront resolver reads
+ * `p3d_models.url` straight from the database, which is the plain one - the token is
+ * stamped on at the edge and never stored. Key the measurement by the url as it arrives
+ * and the two never match, so the storefront finds no calibration and every fabric
+ * surface falls back to repeat 1.
+ *
+ * Dropping the query also means the key cannot rot: an asset token expires, so a signed
+ * url is a different string tomorrow for the very same file.
+ */
+export function modelScaleKey(url: string): string {
+  const query = url.indexOf('?')
+  return query === -1 ? url : url.slice(0, query)
+}
+
+/**
  * Whether `config` carries a measurement for every model file attached to the product,
  * along the axis it actually scales by.
  *
@@ -29,5 +49,6 @@ import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fa
  */
 export function isCalibrated(config: FabricConfig, models: { url: string }[]): boolean {
   const measured = config.scaleAxis === 'width' ? config.modelWidths : config.modelHeights
-  return [...new Set(models.map((m) => m.url))].every((url) => (measured[url] ?? 0) > 0)
+  const byKey = new Map(Object.entries(measured).map(([k, v]) => [modelScaleKey(k), v]))
+  return [...new Set(models.map((m) => modelScaleKey(m.url)))].every((url) => (byKey.get(url) ?? 0) > 0)
 }

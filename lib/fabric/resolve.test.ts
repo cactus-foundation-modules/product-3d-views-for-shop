@@ -162,6 +162,15 @@ describe('measuredUnitsFor', () => {
     expect(measuredUnitsFor(measured, reattached, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
   })
 
+  it('reads a measurement saved under the signed url', () => {
+    // What v0.1.60 wrote: the admin panel measures the url it was handed, which the
+    // admin route signs, while the tree here carries the plain url from p3d_models.
+    // Normalised on read, so those configs come right where they lie rather than
+    // needing every configured product opened and saved a second time.
+    const signed = 'https://cdn.example.com/table-180.obj?t=1784851200000.sometokenhere'
+    expect(measuredUnitsFor({ [signed]: 0.73 }, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
+  })
+
   it('still honours a legacy id-keyed measurement while its row is there', () => {
     expect(measuredUnitsFor({ 'row-a': 0.73 }, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
   })

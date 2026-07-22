@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isCalibrated } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
+import { isCalibrated, modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 
 // This is the trip-wire for a whole class of silent breakage, so it is worth testing on
@@ -29,7 +29,36 @@ const MODELS = [
   { url: TABLE_240 },
 ]
 
+// The signed form of the same file, as the admin route hands it to the panel.
+const TABLE_180_SIGNED = `${TABLE_180}?t=1784851200000.oo8ik2sJbYYw4SDNyCs_6OJIQLT-KouASYZbw67T1Qk`
+
+describe('modelScaleKey', () => {
+  it('files the signed and the plain url under one key', () => {
+    // The whole bug in one assertion. The panel measures a SIGNED url (it has to -
+    // the browser cannot fetch the file otherwise) and the storefront resolves the
+    // plain one out of p3d_models, so keying by the url as it arrives leaves the
+    // storefront with no calibration at all and every finish at repeat 1.
+    expect(modelScaleKey(TABLE_180_SIGNED)).toBe(TABLE_180)
+    expect(modelScaleKey(TABLE_180)).toBe(TABLE_180)
+  })
+
+  it('keeps a key that cannot rot as the token expires', () => {
+    const tomorrow = `${TABLE_180}?t=1784937600000.adifferenttokenentirely`
+    expect(modelScaleKey(tomorrow)).toBe(modelScaleKey(TABLE_180_SIGNED))
+  })
+})
+
 describe('isCalibrated', () => {
+  it('accepts a measurement saved under the signed url', () => {
+    // v0.1.60 wrote these. They are right about the file and wrong about the string,
+    // so they must read as calibrated rather than send the panel round again.
+    expect(isCalibrated(config({ modelHeights: { [TABLE_180_SIGNED]: 0.73, [TABLE_240]: 0.85 } }), MODELS)).toBe(true)
+  })
+
+  it('accepts an attached model whose url arrives signed', () => {
+    expect(isCalibrated(config(), [{ url: TABLE_180_SIGNED }, { url: TABLE_240 }])).toBe(true)
+  })
+
   it('passes a config that measured every attached file', () => {
     expect(isCalibrated(config(), MODELS)).toBe(true)
   })

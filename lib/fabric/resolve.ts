@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db/prisma'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { MANUAL_SIZE_ID, attributeColourId, optionSizeId, parseHexColour, readColourSource, readSizeSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -362,15 +363,20 @@ export function measuredUnitsFor(
   tree: { id: string; url: string }[],
   url: string,
 ): number {
-  const urlById = new Map(tree.map((m) => [m.id, m.url]))
+  const urlById = new Map(tree.map((m) => [m.id, modelScaleKey(m.url)]))
   // Url keys second, so one wins over a legacy id key resolving to the same file: the
   // two can only disagree when one is out of date, and the url key is the newer.
   const byId = Object.entries(measured).filter(([k]) => urlById.has(k))
   const byUrl = Object.entries(measured).filter(([k]) => !urlById.has(k))
   const units = new Map<string, number>()
   for (const [id, value] of byId) units.set(urlById.get(id)!, value)
-  for (const [key, value] of byUrl) units.set(key, value)
-  return units.get(url) ?? 0
+  // Every key through modelScaleKey, not only the ones written from here on: v0.1.60
+  // saved these straight from the admin panel, where a model's url arrives SIGNED, so
+  // the keys already in the database carry an `?t=…` token the storefront's plain url
+  // has not got. Normalising on read puts those right where they lie, rather than
+  // needing every configured product opened and saved a second time.
+  for (const [key, value] of byUrl) units.set(modelScaleKey(key), value)
+  return units.get(modelScaleKey(url)) ?? 0
 }
 
 export function tileRepeat(input: {

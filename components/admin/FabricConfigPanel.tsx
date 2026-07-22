@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureModelWidth, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
-import { isCalibrated } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
+import { isCalibrated, modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import type { FabricBundle, FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
@@ -87,8 +87,13 @@ async function measureConfigured(
     // across a product's variations writes a fresh row per variation, which used to
     // orphan every measurement here and drop the whole product to repeat 1 - a
     // silent un-scaling, since the colours all still paint.
-    heights[model.url] = await measureModelHeight(object)
-    widths[model.url] = await measureModelWidth(object)
+    //
+    // Through modelScaleKey, because a model's url reaches this panel SIGNED while the
+    // storefront reads the plain one out of the database - see that function for why
+    // keying by the url exactly as it arrives here matches nothing downstream.
+    const key = modelScaleKey(model.url)
+    heights[key] = await measureModelHeight(object)
+    widths[key] = await measureModelWidth(object)
   }
 
   const densities: Record<string, number> = {}
@@ -184,12 +189,17 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         // There is nothing left to say which file it measured, so it is dropped rather
         // than carried forward for ever; the measure pass below re-reads the file
         // anyway, and the next save writes the answer back under its url.
-        const urlById = new Map(data.models.map((m) => [m.id, m.url]))
-        const attachedUrls = new Set(data.models.map((m) => m.url))
+        //
+        // Everything goes through modelScaleKey first, so a key saved by v0.1.60 - which
+        // filed these under the SIGNED url this route hands out - lands on the same
+        // string as the plain url the storefront reads, instead of being taken for a
+        // stranded key and thrown away.
+        const urlById = new Map(data.models.map((m) => [m.id, modelScaleKey(m.url)]))
+        const attachedUrls = new Set(data.models.map((m) => modelScaleKey(m.url)))
         const onUrls = (map: Record<string, number>): Record<string, number> =>
           Object.fromEntries(
             Object.entries(map)
-              .map(([k, v]) => [urlById.get(k) ?? k, v] as const)
+              .map(([k, v]) => [urlById.get(k) ?? modelScaleKey(k), v] as const)
               .filter(([k]) => attachedUrls.has(k)),
           )
         const raw = data.config ?? EMPTY
