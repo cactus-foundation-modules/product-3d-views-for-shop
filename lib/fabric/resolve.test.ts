@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { composeFabricBundle, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { composeFabricBundle, measuredUnitsFor, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -135,6 +135,48 @@ describe('tileRepeat', () => {
     expect(tileRepeat({ ...base, swatchCm: null })).toBe(1)
     expect(tileRepeat({ ...base, texelDensity: 0 })).toBe(1)
     expect(tileRepeat({ ...base, modelUnits: 0 })).toBe(1)
+  })
+})
+
+describe('measuredUnitsFor', () => {
+  // One file, attached to three variations: three rows, one url, one measurement.
+  const TREE = [
+    { id: 'row-a', url: 'https://cdn.example.com/table-180.obj' },
+    { id: 'row-b', url: 'https://cdn.example.com/table-180.obj' },
+    { id: 'row-c', url: 'https://cdn.example.com/table-240.obj' },
+  ]
+
+  it('reads a measurement by the file it was taken from, whichever row is shown', () => {
+    const measured = { 'https://cdn.example.com/table-180.obj': 0.73, 'https://cdn.example.com/table-240.obj': 0.85 }
+    expect(measuredUnitsFor(measured, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
+    expect(measuredUnitsFor(measured, TREE, 'https://cdn.example.com/table-240.obj')).toBe(0.85)
+  })
+
+  it('survives the models being re-attached, which is what row ids never did', () => {
+    // The whole point of keying by url. Detaching and re-attaching the same file
+    // across a product's variations writes a new p3d_models row per variation; an
+    // id-keyed config lost its calibration on the spot and every variation dropped
+    // to repeat 1 without a word, which is exactly how it went unnoticed.
+    const measured = { 'https://cdn.example.com/table-180.obj': 0.73 }
+    const reattached = [{ id: 'row-new', url: 'https://cdn.example.com/table-180.obj' }]
+    expect(measuredUnitsFor(measured, reattached, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
+  })
+
+  it('still honours a legacy id-keyed measurement while its row is there', () => {
+    expect(measuredUnitsFor({ 'row-a': 0.73 }, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
+  })
+
+  it('prefers the url key when a legacy id key describes the same file', () => {
+    const measured = { 'row-a': 0.5, 'https://cdn.example.com/table-180.obj': 0.73 }
+    expect(measuredUnitsFor(measured, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0.73)
+  })
+
+  it('leaves the model uncalibrated rather than borrowing another file\'s number', () => {
+    // A stranded id key names a row that is gone, so nothing remains to say which file
+    // it measured. 0 leaves tiling neutral; a guess would scale the weave by a number
+    // belonging to some other model.
+    expect(measuredUnitsFor({ 'row-deleted': 0.73 }, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0)
+    expect(measuredUnitsFor({}, TREE, 'https://cdn.example.com/table-180.obj')).toBe(0)
   })
 })
 

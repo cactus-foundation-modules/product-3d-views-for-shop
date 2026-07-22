@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureModelWidth, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { isCalibrated } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import type { FabricBundle, FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
@@ -81,8 +82,13 @@ async function measureConfigured(
     const model = allModels.find((m) => m.id === id)
     if (!model) continue
     const object = await loadModel(model.url, model.format)
-    heights[id] = await measureModelHeight(object)
-    widths[id] = await measureModelWidth(object)
+    // Keyed by the model's URL, never its p3d_models id: the number describes the
+    // file, and the rows come and go. Detaching and re-attaching the same model
+    // across a product's variations writes a fresh row per variation, which used to
+    // orphan every measurement here and drop the whole product to repeat 1 - a
+    // silent un-scaling, since the colours all still paint.
+    heights[model.url] = await measureModelHeight(object)
+    widths[model.url] = await measureModelWidth(object)
   }
 
   const densities: Record<string, number> = {}
@@ -155,6 +161,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const [densities, setDensities] = useState<Record<string, number>>({})
   const [measuring, setMeasuring] = useState(false)
   const [saving, setSaving] = useState(false)
+  // Set on load when the saved config has lost the measurement for a model now
+  // attached, and cleared by the heal effect once the re-measurement has been saved
+  // back. See the effect for why it is not simply done in the load handler.
+  const [needsHeal, setNeedsHeal] = useState(false)
   const [message, setMessage] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
 
@@ -164,26 +174,47 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { config: FabricConfig | null; options: FabricColourOption[]; colourAttributes: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
-        // The same GLB is attached once per variation, so the raw model list repeats
-        // each file dozens of times (one p3d_models row per variation). A model's
-        // measured size is a fact about the FILE, and the storefront reads it by url, so
-        // a saved key that lands on a non-representative row must be pulled back to its
-        // file's stand-in row - else the measurement is lost. Canonicalise every
-        // modelHeights and modelWidths key to the first-seen row for its url before
-        // anything reads them.
-        const repByUrl = new Map<string, string>()
-        for (const m of data.models) if (!repByUrl.has(m.url)) repByUrl.set(m.url, m.id)
-        const canon = (id: string): string => {
-          const m = data.models.find((x) => x.id === id)
-          return m ? repByUrl.get(m.url) ?? id : id
-        }
+        // A measured size is a fact about the FILE, and both this panel and the
+        // storefront read it by url, so every saved key is pulled onto its url before
+        // anything reads it. Configs written before that keyed by p3d_models id - one
+        // row per variation for the same file - which survived only as long as the row
+        // did: re-attaching a model wrote new rows and stranded the measurement.
+        //
+        // A key that is neither a url nor a live row id is exactly that stranded case.
+        // There is nothing left to say which file it measured, so it is dropped rather
+        // than carried forward for ever; the measure pass below re-reads the file
+        // anyway, and the next save writes the answer back under its url.
+        const urlById = new Map(data.models.map((m) => [m.id, m.url]))
+        const attachedUrls = new Set(data.models.map((m) => m.url))
+        const onUrls = (map: Record<string, number>): Record<string, number> =>
+          Object.fromEntries(
+            Object.entries(map)
+              .map(([k, v]) => [urlById.get(k) ?? k, v] as const)
+              .filter(([k]) => attachedUrls.has(k)),
+          )
         const raw = data.config ?? EMPTY
         const saved: FabricConfig = {
           ...raw,
-          modelHeights: Object.fromEntries(Object.entries(raw.modelHeights).map(([k, v]) => [canon(k), v])),
-          modelWidths: Object.fromEntries(Object.entries(raw.modelWidths).map(([k, v]) => [canon(k), v])),
+          modelHeights: onUrls(raw.modelHeights),
+          modelWidths: onUrls(raw.modelWidths),
         }
         setConfig(saved)
+        // Has the saved config a measurement for every model file now attached? A
+        // configured product that has not is one whose scaling is dead: the storefront
+        // has no cm-per-model-unit for the model it draws, so every fabric surface
+        // falls back to repeat 1 - and it does so QUIETLY, since the colours all still
+        // paint and only the weave comes out the wrong size. That is exactly how it
+        // went unnoticed after a product's models were re-attached.
+        //
+        // Said plainly here, and put right by the heal effect below, so the fix is
+        // opening the page rather than knowing to press Save.
+        if (data.config && saved.slots.length > 0 && !isCalibrated(saved, data.models)) {
+          setNeedsHeal(true)
+          setMessage({
+            kind: 'err',
+            text: 'The models attached to this product have changed since the material setup was saved, so the finishes were being drawn at the wrong scale. Re-measuring them now.',
+          })
+        }
         // Seed the densities from what was measured on the last save, so the panel
         // is usable before a re-detect and a save without one keeps them.
         setDensities(Object.fromEntries(saved.slots.map((s) => [s.materialName, s.texelDensity])))
@@ -270,7 +301,17 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     let cancelled = false
     measureConfigured(faceModel, configuredIds, models)
       .then((m) => { if (!cancelled) applyMeasurement(m) })
-      .catch(() => {})
+      .catch((error) => {
+        // Silent when nothing depended on it - the admin has asked for nothing and the
+        // Detect button says its own piece. But a measurement that was putting a lost
+        // calibration back is the one thing on this screen the admin never asked for
+        // and most needs told about: it leaves the product scaling wrongly on the shop.
+        if (cancelled || !needsHeal) return
+        setMessage({
+          kind: 'err',
+          text: `This product's finishes are being drawn at the wrong size and the models could not be re-read to fix it: ${error instanceof Error ? error.message : 'the file could not be loaded'}.`,
+        })
+      })
     return () => { cancelled = true }
     // Keyed on the configured model ids; faceModel/models are read as the source to
     // measure, not triggers.
@@ -332,7 +373,9 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     }))
   }
 
-  const save = async () => {
+  // `healed` marks a save the panel made on its own, which reports itself differently:
+  // "Saved." beside a button nobody pressed explains nothing.
+  const save = useCallback(async (healed = false) => {
     setSaving(true)
     setMessage(null)
     // Merge the measured texel densities into the slots at the last moment, so a
@@ -348,7 +391,12 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         body: JSON.stringify(payload),
       })
       if (res.ok) {
-        setMessage({ kind: 'ok', text: 'Saved.' })
+        setMessage({
+          kind: 'ok',
+          text: healed
+            ? 'Re-measured this product’s models and saved. The finishes are back at their true size on the shop.'
+            : 'Saved.',
+        })
       } else {
         const body = await res.json().catch(() => ({}))
         setMessage({ kind: 'err', text: body.error ?? 'Could not save the material configuration.' })
@@ -358,7 +406,25 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     } finally {
       setSaving(false)
     }
-  }
+  }, [config, densities, productId])
+
+  // Put a lost calibration back without being asked.
+  //
+  // Separate from the measure effect rather than chained onto it, because what has to
+  // be saved is the config AFTER the measurement has landed in state, and the effect
+  // only queues that update - reading it there would save the very numbers that are
+  // missing. Waiting on `isCalibrated` also means a file that will not load never
+  // triggers a save of a half-measured config: the warning stays up instead, which is
+  // the truthful thing to show.
+  useEffect(() => {
+    if (!needsHeal || saving || models.length === 0) return
+    if (!isCalibrated(config, models)) return
+    // `save` always resolves (it catches its own request errors to show them as a
+    // message), so this clears the flag exactly once per detected loss - whether the
+    // save landed or not - rather than retrying on every render that happens to follow.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- delegating to async helper; setState is after an await inside save/its .then
+    void save(true).then(() => setNeedsHeal(false))
+  }, [needsHeal, saving, models, config, save])
 
   // A rough preview of each slot's colour on the model. It is a colour/placement
   // check, not a scale one - true scale needs the per-variation height and swatch

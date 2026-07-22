@@ -1,6 +1,6 @@
 {
   "name": "product-3d-views-for-shop",
-  "version": "0.1.59",
+  "version": "0.1.60",
   "tablePrefix": "p3d_",
   "description": "3D models for shop products and their variations: an auto-rotating thumbnail in the product gallery that opens a pan/tilt/zoom viewer in place of the main image.",
   "requiresCoreVersion": "0.5.614",

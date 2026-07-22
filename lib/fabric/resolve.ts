@@ -339,6 +339,40 @@ export function composeFabricBundle(
  * correct, only the scale is neutral until the data is filled in. There is deliberately
  * no default size: the size is a per-variation fact, not something this module invents.
  */
+/**
+ * The measured extent, in the model's own units, of the file shown at `url`.
+ *
+ * A measurement belongs to the FILE, so a saved config keys it by the model's url -
+ * the same GLB attached to forty variations is forty p3d_models rows and one number.
+ *
+ * Configs written before v0.1.60 keyed it by row id instead, which tied the whole
+ * calibration to rows that do not survive a model being detached and re-attached:
+ * re-attaching writes fresh rows, the saved keys point at nothing, and every variation
+ * on the product drops to repeat 1 - silently, since the colours all still paint. Such
+ * a key is still honoured, translated through the tree for as long as its row is there,
+ * so an untouched config goes on scaling until its next save; nothing writes one any
+ * more. A key that is neither is a stranded measurement with nothing left to say which
+ * file it described, and is ignored.
+ *
+ * 0 when the file has no measurement, which leaves tiling uncalibrated rather than
+ * scaled by a number belonging to some other model.
+ */
+export function measuredUnitsFor(
+  measured: Record<string, number>,
+  tree: { id: string; url: string }[],
+  url: string,
+): number {
+  const urlById = new Map(tree.map((m) => [m.id, m.url]))
+  // Url keys second, so one wins over a legacy id key resolving to the same file: the
+  // two can only disagree when one is out of date, and the url key is the newer.
+  const byId = Object.entries(measured).filter(([k]) => urlById.has(k))
+  const byUrl = Object.entries(measured).filter(([k]) => !urlById.has(k))
+  const units = new Map<string, number>()
+  for (const [id, value] of byId) units.set(urlById.get(id)!, value)
+  for (const [key, value] of byUrl) units.set(key, value)
+  return units.get(url) ?? 0
+}
+
 export function tileRepeat(input: {
   realCm: number | null
   modelUnits: number
@@ -450,17 +484,7 @@ export async function resolveFabricForChild(
   // it always did because it is on the height axis by default.
   const measured = config.scaleAxis === 'width' ? config.modelWidths : config.modelHeights
 
-  // Those maps are keyed by p3d_models id, but the same GLB is attached once per
-  // variation (many rows, one url), so the shown child's row id is not the id the
-  // model was measured against. The measurement belongs to the FILE - resolve it by
-  // url, so whichever row is shown finds the number measured for its file.
-  const urlById = new Map(tree.map((m) => [m.id, m.url]))
-  const unitsByUrl = new Map<string, number>()
-  for (const [id, units] of Object.entries(measured)) {
-    const url = urlById.get(id)
-    if (url) unitsByUrl.set(url, units)
-  }
-  const modelUnits = unitsByUrl.get(shown.url) ?? 0
+  const modelUnits = measuredUnitsFor(measured, tree, shown.url)
 
   return composeFabricBundle(
     config,

@@ -83,10 +83,15 @@ export const FabricConfigSchema = z.object({
   // inventing an attribute and setting the same value on every variation.
   heightManual: z.string().default(''),
   // Each attached model's bounding-box height in its OWN units, measured from the
-  // mesh at config time. Keyed by p3d_models id, but the height belongs to the FILE
-  // (its url), so the resolver reads it by url - the same GLB attached to several
-  // variations has one height across all of them. Paired with the real height above
-  // to get cm-per-model-unit.
+  // mesh at config time. Keyed by the model's URL, because the height belongs to the
+  // FILE - the same GLB attached to several variations has one height across all of
+  // them. Paired with the real height above to get cm-per-model-unit.
+  //
+  // Keyed by p3d_models id before v0.1.60, which tied the calibration to rows that do
+  // not survive a model being detached and re-attached: new rows, dead keys, and every
+  // variation silently back to repeat 1 while the colours went on painting perfectly.
+  // Old keys are still translated on read (resolve.ts) and on load in the admin panel,
+  // so an untouched config keeps scaling; nothing writes them any more.
   modelHeights: z.record(z.string(), z.number()).default({}),
   // The same again along X, for `scaleAxis: 'width'`. Both are measured and stored on
   // every save regardless of the axis in force, so switching the axis re-scales
