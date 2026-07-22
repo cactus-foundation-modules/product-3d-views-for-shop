@@ -5,15 +5,19 @@
 // context - unlike the thumbnails, there is only ever one of these on screen, so
 // it can have a renderer to itself and drive it straight into a real canvas.
 //
-// It auto-rotates until the shopper touches it, and then stops for good. A model
-// that keeps spinning while someone is trying to look at one corner of it is
-// fighting them; the rotation is there to say "this moves", and once they have
-// taken it up it has done its job.
+// It moves by itself until the shopper touches it, and then stops for good. A
+// model that keeps spinning while someone is trying to look at one corner of it is
+// fighting them; the motion is there to say "this moves", and once they have taken
+// it up it has done its job. How much motion is the site owner's call
+// (autoRotateStyle): a single eased nudge the first time the stage is on screen,
+// which is the default and leaves the GPU idle for the rest of the visit, or the
+// old endless turn.
 
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -374,13 +378,42 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // carries on; stopped stays stopped. Keyed on the carry's `spinning`,
         // not `touched` - a shopper who pressed Reset view asked for the turn
         // back, and swapping a headrest is no reason to take it away again.
-        controls.autoRotate = wantsMotion && !spinMode && (carried ? carried.spinning : true)
+        const resumesIdle = carried ? carried.spinning : true
+        // The one-off turn, rather than the endless one. Both are "idle motion" and
+        // only one of them can be running, so everything below that starts the
+        // continuous turn is gated against this.
+        const nudgeStyle = settings.autoRotateStyle === 'nudge'
+        controls.autoRotate = wantsMotion && !nudgeStyle && !spinMode && resumesIdle
         controls.autoRotateSpeed = settings.autoRotateSpeed
         // Per-frame turn for the model-spin path, matched to OrbitControls' own
         // auto-rotation step so both modes read at the same speed for a given
         // autoRotateSpeed.
         const spinStep = ((2 * Math.PI) / 60 / 60) * settings.autoRotateSpeed
-        let idleSpin = wantsMotion && spinMode && (carried ? carried.spinning : true)
+        let idleSpin = wantsMotion && !nudgeStyle && spinMode && resumesIdle
+
+        // The nudge itself: the model turns through autoRotateSweep once, eased in
+        // and out so it reads as a gesture rather than as a motor being switched on
+        // and off, and then holds still for good. Driven here rather than through
+        // OrbitControls' own auto-rotation because the same tween has to serve both
+        // viewer kinds - the pivot in spin mode, the camera's azimuth otherwise -
+        // and because a sweep needs a finish line, which a rate has no notion of.
+        const nudgeSweep = (settings.autoRotateSweep * Math.PI) / 180
+        // Armed when the stage first comes into view (see the IntersectionObserver
+        // below), not at build: a viewer that nudges while it is still below the
+        // fold has spent the frames and made its point to nobody.
+        let nudgeRunning = false
+        // Whether this viewer's one nudge has been handed out. The observer that arms
+        // it now stays connected for the whole life of the viewer (it is also what
+        // parks the loop when the stage scrolls away), so without this a shopper
+        // scrolling the gallery in and out of view would get the sweep again each
+        // time - a model that twitches every time it is looked at, rather than one
+        // that introduced itself once.
+        let nudgeSpent = false
+        let nudgeElapsed = 0
+        // How much of the sweep the tween has already handed out, so each frame
+        // applies the difference rather than an absolute angle - which is what lets
+        // it drive a relative orbit and a pivot that a drag may also have moved.
+        let nudgeApplied = 0
         // Plain booleans shadowing the touched/moved state, because dispose() below
         // captures the view for the NEXT build and React state read from this
         // closure would be frozen at its mount-time value.
@@ -406,6 +439,10 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         const takeHold = (): void => {
           controls.autoRotate = false
           idleSpin = false
+          // Mid-nudge counts: a shopper who grabbed the model while it was turning
+          // has taken the demonstration off our hands, and finishing the sweep under
+          // their finger would be the viewer arguing with them.
+          nudgeRunning = false
           latchTouched = true
           latchMoved = true
           setTouched(true)
@@ -566,8 +603,16 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           controls.reset()
           pivot.rotation.y = 0
           spinVelocity = 0
-          controls.autoRotate = wantsMotion && !spinMode
-          idleSpin = wantsMotion && spinMode
+          controls.autoRotate = wantsMotion && !nudgeStyle && !spinMode
+          idleSpin = wantsMotion && !nudgeStyle && spinMode
+          // The opening view is a turning one, so on a nudge viewer "how it opened"
+          // includes the nudge - and unlike the first time, there is no waiting for
+          // the stage to come into view: the shopper is looking straight at it, they
+          // just pressed the button on it.
+          nudgeRunning = wantsMotion && nudgeStyle
+          nudgeSpent = true
+          nudgeElapsed = 0
+          nudgeApplied = 0
           latchMoved = false
           setMoved(false)
           // Not left to controls.reset()'s own 'change' event, which in spin mode may
@@ -597,6 +642,70 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         resize()
         const observer = new ResizeObserver(resize)
         observer.observe(host!)
+
+        // Nothing is drawn, and nothing turns, while the shopper is not actually
+        // looking at this viewer.
+        //
+        // Two ways to not be looking at it, and the browser only handles one of them.
+        // A tab moved to the background stops receiving animation frames of its own
+        // accord, so the loop below simply stops being called and picks up where it
+        // left off on the shopper's return - that half is free, and has always worked.
+        // The half the browser has no opinion about is a viewer scrolled off the
+        // screen of a tab that is very much in front: a product page whose gallery has
+        // been scrolled past keeps turning a model into a canvas nobody can see, for
+        // as long as the shopper reads the description below it. That is the endless
+        // turn's real cost, and it is paid entirely for nothing.
+        //
+        // So the loop is parked outright when the stage leaves the viewport and
+        // restarted when it comes back. Parked, not merely told to skip its render:
+        // the point is to stop asking for frames at all. Nobody can be mid-drag on a
+        // viewer that is off screen, so there is no motion to preserve across it - and
+        // the clock is re-based on the way back in, so neither the nudge nor a model's
+        // own animation jumps to catch up on time nobody watched pass.
+        let onScreen = true
+        const setOnScreen = (visible: boolean): void => {
+          if (visible === onScreen) return
+          onScreen = visible
+          if (!visible) {
+            if (frame !== null) cancelAnimationFrame(frame)
+            frame = null
+            return
+          }
+          lastFrameAt = performance.now()
+          // The drawing buffer may have been cleared while parked, so the first frame
+          // back is always drawn rather than skipped as unchanged.
+          invalidate()
+          if (frame === null) loop(lastFrameAt)
+        }
+
+        // The nudge waits for the same first sight. A product page whose gallery sits
+        // below the fold on a phone would otherwise spend its sweep while the shopper
+        // is still reading the title, and arrive at a model that has already done its
+        // one trick.
+        const armNudge = (): void => {
+          // Not if they have already taken hold of it - a shopper who dragged the
+          // model while it was off screen (keyboard focus, a deep link) has said
+          // everything the nudge was going to.
+          if (latchTouched || nudgeSpent) return
+          nudgeSpent = true
+          nudgeRunning = true
+          invalidate()
+        }
+        const wantsNudge = wantsMotion && nudgeStyle && resumesIdle
+
+        let seen: IntersectionObserver | null = null
+        if (typeof IntersectionObserver === 'undefined') {
+          // No observer to ask: the viewer stays awake as it always did, and the nudge
+          // goes now rather than never.
+          if (wantsNudge) armNudge()
+        } else {
+          seen = new IntersectionObserver((entries) => {
+            const visible = entries.some((entry) => entry.isIntersecting)
+            if (visible && wantsNudge) armNudge()
+            setOnScreen(visible)
+          }, { threshold: 0 })
+          seen.observe(host!)
+        }
 
         // A file that ships its own animation plays it on a loop - a desk with a
         // pop-up socket demonstrating itself is the whole reason the shopper opened
@@ -632,12 +741,23 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         // turn still running, therefore renders every frame exactly as before - nothing
         // that moves has been slowed down, only what does not move has stopped being
         // redrawn.
-        const loop = (): void => {
+        let lastFrameAt = performance.now()
+        const loop = (now: number): void => {
           frame = requestAnimationFrame(loop)
+          // Real elapsed milliseconds, so the nudge takes the same second and a half
+          // on a phone dropping frames as it does on a desktop holding sixty. Clamped
+          // because a backgrounded tab resumes with an enormous gap, and a nudge that
+          // teleports through its whole sweep on the first frame back is not a nudge.
+          const elapsed = Math.min(now - lastFrameAt, 100)
+          lastFrameAt = now
           // Ticked every frame whether or not it is drawn, or a dropped frame would
           // leave the clip running against a clock it was not authored to.
           if (mixer && clock) {
-            mixer.update(clock.getDelta())
+            // Clamped for the same reason `elapsed` is: the clock keeps running while
+            // the loop is parked (a backgrounded tab, a stage scrolled out of view),
+            // and handing the mixer half a minute in one go would fast-forward the
+            // clip to wherever it had got to unwatched instead of resuming it.
+            mixer.update(Math.min(clock.getDelta(), 0.1))
             invalidate()
           }
           // The model-spin path: the idle turn, or the glide left over from a drag.
@@ -652,6 +772,22 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
             spinVelocity *= 1 - settings.dampingFactor
             invalidate()
           }
+          // The nudge, in whichever of the two viewer kinds this is: the model turns
+          // on its pivot in spin mode, and otherwise the camera goes round it, which
+          // is the same pair of answers the drag and the arrow keys already give. The
+          // step is the difference between where the eased curve says the sweep should
+          // be now and how much of it has already been handed out, so a frame lost
+          // costs smoothness and never the finishing angle.
+          if (nudgeRunning) {
+            const next = nudgeStep({ elapsed: nudgeElapsed, applied: nudgeApplied }, elapsed, nudgeSweep)
+            nudgeElapsed = next.state.elapsed
+            nudgeApplied = next.state.applied
+            if (spinMode) pivot.rotation.y += next.turn
+            else orbitBy(next.turn, 0)
+            invalidate()
+            // Done, and done for good: nothing sets this again bar Reset view.
+            if (next.done) nudgeRunning = false
+          }
           // Called every frame regardless: damping settles over several frames after a
           // drag ends, and it is this call that both advances it and reports the move
           // through 'change'. It costs nothing on a still viewer.
@@ -660,7 +796,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           needsRender = false
           renderer.render(scene, camera)
         }
-        loop()
+        loop(lastFrameAt)
         setStatus('ready')
 
         dispose = () => {
@@ -677,7 +813,7 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
             // Either mode's idle motion counts; a drag mid-flight has already
             // set both to false, so a shopper holding the model as the swap
             // lands does not get it snatched into a spin.
-            spinning: controls.autoRotate || idleSpin,
+            spinning: controls.autoRotate || idleSpin || nudgeRunning,
             at: performance.now(),
           }
           if (frame !== null) cancelAnimationFrame(frame)
@@ -687,6 +823,9 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
           mixer?.stopAllAction()
           mixer?.uncacheRoot(model)
           observer.disconnect()
+          // Connected for the whole life of the viewer: it is what parks the loop when
+          // the stage scrolls out of view and restarts it when it comes back.
+          seen?.disconnect()
           canvas!.removeEventListener('keydown', onKeyDown)
           if (spinMode) {
             canvas!.removeEventListener('pointerdown', onPointerDown)

@@ -85,6 +85,24 @@ export const P3dConfigSchema = z
     // time - this is the site owner saying what happens for everyone who has not
     // asked for less movement, not an override of the ones who have.
     autoRotate: z.boolean().default(true),
+    // What the idle motion actually is. 'continuous' (the default, and what this
+    // module has always done) turns the model for as long as the shopper is
+    // looking at it, or until they take hold of it. It is only ever drawn while
+    // the viewer is genuinely on screen and the tab is in front - a backgrounded
+    // tab gets no animation frames from the browser at all, and a viewer scrolled
+    // out of view parks its own loop - so the cost is paid while somebody is
+    // watching and not otherwise.
+    //
+    // 'nudge' makes the same point once and then stops: the model turns through
+    // autoRotateSweep the first time it comes into view and then holds still, at
+    // which point the renderer has nothing to draw for the rest of the visit. The
+    // one to reach for if shoppers on older phones report the page getting warm.
+    autoRotateStyle: z.enum(['nudge', 'continuous']).default('continuous'),
+    // How far the nudge turns, in degrees. Enough to read as depth - a face
+    // rotating away, a side coming into view - and not so far that the model ends
+    // up showing a shopper its back before they have touched anything. Ignored
+    // entirely when the style is 'continuous'.
+    autoRotateSweep: z.number().min(5).max(180).default(40),
     autoRotateSpeed: z.number().min(0.1).max(10).default(1.2),
     // Off keeps the historic behaviour: the camera does everything - auto-rotate
     // orbits it, and a drag swings it round a still model, shadow and all. On, the

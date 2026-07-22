@@ -4,6 +4,7 @@ import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
 import { addLights, applyEnvironment, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
+import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 
 // Drives every auto-rotating 3D thumbnail on the page from ONE WebGL context.
 //
@@ -41,6 +42,15 @@ type Entry = {
    * something invalidates it - a mount, or a renderer rebuilt after a context loss.
    */
   needsDraw: boolean
+  /** Milliseconds of this thumbnail's one-off nudge spent so far. Only advances
+   *  while the thumbnail is on screen, so one below the fold still has its turn
+   *  waiting for it when the shopper scrolls down. */
+  nudgeElapsed: number
+  /** How much of the sweep has already been handed to the pivot, so each frame
+   *  applies the difference rather than an absolute angle. */
+  nudgeApplied: number
+  /** Set once the nudge has run its course. Never unset: the point was made. */
+  nudgeDone: boolean
 }
 
 let renderer: WebGLRenderer | null = null
@@ -61,9 +71,11 @@ let lastTime = 0
 // has nothing to draw anyway.
 let thumbSettings: P3dConfig | null = null
 
-// Radians per second. Slow enough to read the shape rather than to advertise that
-// it moves; a thumbnail spinning fast enough to notice is a thumbnail nobody can
-// actually look at. The site owner can switch it off entirely (thumbnailAutoRotate).
+// Radians per second for the ENDLESS spin (autoRotateStyle 'continuous'). Slow
+// enough to read the shape rather than to advertise that it moves; a thumbnail
+// spinning fast enough to notice is a thumbnail nobody can actually look at. The
+// site owner can switch it off entirely (thumbnailAutoRotate), or leave it on the
+// default one-off nudge, which is paced by lib/nudge.ts instead.
 const SPIN_RATE = 0.6
 
 // The shopper asked their operating system for less movement, so the thumbnails
@@ -87,9 +99,23 @@ async function getRenderer(): Promise<WebGLRenderer | null> {
   // and every tick. One failure settles it for the page.
   if (rendererFailed) return null
   try {
-    const { WebGLRenderer } = await import('three')
-    renderer = new WebGLRenderer({ alpha: true, antialias: thumbSettings?.antialias ?? true })
+    const three = await import('three')
+    renderer = new three.WebGLRenderer({ alpha: true, antialias: thumbSettings?.antialias ?? true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, thumbSettings?.pixelRatioCap ?? 2))
+    // The same tone curve and exposure the stage viewer draws through. Without this
+    // the strip renders at the renderer's own defaults (no curve, exposure 1) while
+    // the big view next to it renders through the owner's chosen curve, so the two
+    // pictures of the same model sit side by side at visibly different brightness -
+    // and the thumbnail is the one that looks wrong, since the stage is what the
+    // owner set up against. Every thumbnail on a page carries the same settings, so
+    // reading them off whoever mounted first is the same value as reading them off
+    // any of them (same bargain as antialias and the pixel-ratio cap above).
+    renderer.toneMapping = {
+      none: three.NoToneMapping,
+      aces: three.ACESFilmicToneMapping,
+      neutral: three.NeutralToneMapping,
+    }[thumbSettings?.toneMapping ?? 'none']
+    renderer.toneMappingExposure = thumbSettings?.exposure ?? 1
     // Lend this context to the KTX2 transcoder's one-off capability check, so it does
     // not open a WebGL context of its own to ask a question this one can answer.
     warmKtx2Support(renderer)
@@ -158,15 +184,31 @@ function watchForContextLoss(target: WebGLRenderer): void {
 
 function tick(time: number): void {
   frame = null
+  // Zero on the first frame of a run, since there is no previous timestamp to
+  // measure from. That is the whole reason the loop must NOT decide whether to
+  // carry on by looking at the resulting step: see `pending` below.
   const delta = lastTime ? Math.min((time - lastTime) / 1000, 0.1) : 0
   lastTime = time
 
   // Held still if the shopper asked their system for less motion, or if the
   // site owner turned the thumbnail spin off. Either one is a "no".
-  const spinning = !prefersReducedMotion() && (thumbSettings?.thumbnailAutoRotate ?? true)
+  const wantsMotion = !prefersReducedMotion() && (thumbSettings?.thumbnailAutoRotate ?? true)
+  // The strip follows the same choice the stage does, so a shop does not end up
+  // with a still viewer beside a permanently turning strip (or the reverse).
+  const nudgeStyle = (thumbSettings?.autoRotateStyle ?? 'nudge') === 'nudge'
+  const spinning = wantsMotion && !nudgeStyle
   const spin = spinning ? SPIN_RATE * delta : 0
-  // Whether anything still owes a frame it has not been able to draw yet, which is what
-  // keeps the loop alive on a strip that is not spinning.
+  const nudgeSweep = ((thumbSettings?.autoRotateSweep ?? 40) * Math.PI) / 180
+  // Whether anything still owes work - a frame it has not been able to draw yet, or a
+  // nudge it has not finished - which is what keeps the loop alive on a strip that is
+  // not endlessly spinning.
+  //
+  // It must NEVER be the per-frame step that decides this. `spin` is zero on the first
+  // frame of every run (delta is zero, there being no previous timestamp), so a loop
+  // that carried on only while `spin > 0` scheduled no second frame, reset lastTime on
+  // the way out, and left every later `start()` repeating that same dead first frame:
+  // the whole strip drew one still picture and never moved again, on every site, with
+  // auto-rotate switched firmly on. Intent, not step.
   let pending = false
 
   if (renderer && !contextLost) {
@@ -174,18 +216,34 @@ function tick(time: number): void {
       // A thumbnail scrolled out of the viewport is still being drawn without
       // this check, which on a long category page is a lot of GPU spent on
       // pictures nobody is looking at.
+      const owesNudge = wantsMotion && nudgeStyle && !entry.nudgeDone
       if (!isVisible(entry.canvas)) {
         // One that has never been drawn still owes its first frame, for whenever it
         // scrolls in. One already drawn owes nothing: its 2D canvas is still holding
-        // the picture.
-        pending ||= entry.needsDraw
+        // the picture. A nudge not yet spent is owed too - it is waiting for this
+        // thumbnail to be looked at, which is the point of it.
+        pending ||= entry.needsDraw || owesNudge
         continue
       }
-      // A still strip - reduced motion, or the owner's own choice - draws each
-      // thumbnail once and then leaves it alone. Redrawing an unchanging picture sixty
-      // times a second is a phone's battery spent on nothing whatsoever.
-      if (spin === 0 && !entry.needsDraw) continue
-      entry.pivot.rotation.y += spin
+      // The nudge: this thumbnail's one turn, eased in and out, spent the first time
+      // it is actually on screen. Same tween and duration as the stage viewer, so the
+      // strip and the big view read as the same gesture.
+      let turn = spin
+      if (owesNudge) {
+        const next = nudgeStep({ elapsed: entry.nudgeElapsed, applied: entry.nudgeApplied }, delta * 1000, nudgeSweep)
+        turn += next.turn
+        entry.nudgeElapsed = next.state.elapsed
+        entry.nudgeApplied = next.state.applied
+        entry.nudgeDone = next.done
+        if (!next.done) pending = true
+        entry.needsDraw = true
+      }
+      // A still strip - reduced motion, the owner's own choice, or a nudge already
+      // spent - draws each thumbnail once and then leaves it alone. Redrawing an
+      // unchanging picture sixty times a second is a phone's battery spent on nothing
+      // whatsoever.
+      if (turn === 0 && !entry.needsDraw) continue
+      entry.pivot.rotation.y += turn
       const { width, height } = entry.canvas
       if (width === 0 || height === 0) { pending = true; continue }
       renderer.setSize(width, height, false)
@@ -200,7 +258,7 @@ function tick(time: number): void {
     pending = true
   }
 
-  if (entries.size > 0 && (spin > 0 || pending)) frame = requestAnimationFrame(tick)
+  if (entries.size > 0 && (spinning || pending)) frame = requestAnimationFrame(tick)
   else lastTime = 0
 }
 
@@ -259,7 +317,10 @@ export async function mountThumb(
   camera.position.set(0, 0.6, 4)
   camera.lookAt(0, 0, 0)
 
-  const entry: Entry = { canvas, ctx, scene, camera, pivot, model, needsDraw: true }
+  const entry: Entry = {
+    canvas, ctx, scene, camera, pivot, model, needsDraw: true,
+    nudgeElapsed: 0, nudgeApplied: 0, nudgeDone: false,
+  }
   entries.add(entry)
   start()
 

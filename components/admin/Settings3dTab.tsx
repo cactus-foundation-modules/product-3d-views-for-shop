@@ -25,6 +25,11 @@ const TONE_MAPPING_LABELS: Record<P3dConfig['toneMapping'], string> = {
   neutral: 'Neutral',
 }
 
+const AUTO_ROTATE_STYLE_LABELS: Record<P3dConfig['autoRotateStyle'], string> = {
+  continuous: 'Keep turning until the shopper grabs it',
+  nudge: 'One turn when it comes into view, then still',
+}
+
 const SHADOW_SOFTNESS_LABELS: Record<P3dConfig['shadowSoftness'], string> = {
   sharp: 'Sharp',
   soft: 'Soft',
@@ -268,8 +273,35 @@ export function Settings3dTab() {
 
         <label style={checkboxRow}>
           <input type="checkbox" checked={config.autoRotate} onChange={(e) => set('autoRotate', e.target.checked)} />
-          Turn the model slowly until the shopper grabs it
+          Move the model by itself until the shopper grabs it
         </label>
+        <div style={fieldGrid}>
+          <div className="field" style={{ margin: 0, opacity: config.autoRotate ? 1 : 0.5 }}>
+            <label>How it moves</label>
+            <select
+              value={config.autoRotateStyle}
+              disabled={!config.autoRotate}
+              onChange={(e) => set('autoRotateStyle', e.target.value as P3dConfig['autoRotateStyle'])}
+            >
+              {Object.entries(AUTO_ROTATE_STYLE_LABELS).map(([key, label]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+            <span style={hint}>
+              Either way the model only moves while the shopper is actually looking at it - scroll it off the
+              screen, or switch tabs, and it stops until they come back. Pick the single turn if shoppers on
+              older phones tell you the page runs warm.
+            </span>
+          </div>
+          <SliderField
+            label="How far it turns"
+            value={config.autoRotateSweep}
+            min={5} max={180} step={5}
+            disabled={!config.autoRotate || config.autoRotateStyle !== 'nudge'}
+            onChange={(v) => set('autoRotateSweep', v)}
+            help="Degrees, for the single turn only. Around 40 shows depth without presenting the back of the product."
+          />
+        </div>
         <label style={checkboxRow}>
           <input
             type="checkbox"
@@ -295,8 +327,9 @@ export function Settings3dTab() {
             label="Turn speed"
             value={config.autoRotateSpeed}
             min={0.1} max={10} step={0.1}
-            disabled={!config.autoRotate}
+            disabled={!config.autoRotate || config.autoRotateStyle !== 'continuous'}
             onChange={(v) => set('autoRotateSpeed', v)}
+            help="For the endless turn only. The single turn always takes about a second and a half."
           />
           <SliderField
             label="Weight"
