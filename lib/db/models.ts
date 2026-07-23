@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { deleteMedia } from '@/lib/media/upload'
 import { signAssetUrl } from '@/lib/media/asset-token'
+import { withFreshStorage } from '@/modules/product-3d-views-for-shop/lib/db/heal'
 import type { MediaProviderType } from '@prisma/client'
 import type { P3dAdminModel, P3dModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -178,7 +179,11 @@ export async function getModelsForProductTree(productId: string): Promise<P3dMod
     WHERE "product_id" = ANY(${ids}::text[])
     ORDER BY "position", "created_at"
   `
-  return rows.map(toModel)
+  // Repair any row the core library moved out from under before the media
+  // reference rewriter existed, so the storefront and the editor preview both get
+  // the blob's current address rather than a 404. A no-op for rows already in step
+  // (the common case), and for url-only Google Sheet imports with no media id.
+  return Promise.all(rows.map((r) => withFreshStorage(toModel(r))))
 }
 
 /** The editor's list: every model for the product tree, each named by its target. */
