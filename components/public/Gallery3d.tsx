@@ -412,7 +412,12 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
   // and without this the first (server) half of that wait showed nothing at all. A
   // cached bundle resolves on the spot, and the overlay's own appearance delay keeps
   // that instant round-trip invisible.
-  const [resolved, setResolved] = useState<{ productId: string; slots: FabricBundle['slots'] } | null>(null)
+  const [resolved, setResolved] = useState<{
+    productId: string
+    slots: FabricBundle['slots']
+    realCm: number | null
+    scaleAxis: 'height' | 'width'
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -421,16 +426,28 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
         // A variation the resolver could not place (missing config, absent companion
         // tables) resolves to no paints, and the model stays on the stage unpainted
         // rather than vanishing.
-        if (!cancelled) setResolved({ productId: item.productId, slots: bundle?.slots ?? [] })
+        if (!cancelled) setResolved({
+          productId: item.productId,
+          slots: bundle?.slots ?? [],
+          realCm: bundle?.realCm ?? null,
+          scaleAxis: bundle?.scaleAxis ?? 'height',
+        })
       })
-      .catch(() => { if (!cancelled) setResolved({ productId: item.productId, slots: [] }) })
+      .catch(() => { if (!cancelled) setResolved({ productId: item.productId, slots: [], realCm: null, scaleAxis: 'height' }) })
     return () => { cancelled = true }
     // payload.parentProductId is page-static; the variation whose model this is drives
     // the fetch, and a cached bundle resolves on the spot.
   }, [payload.parentProductId, item.productId])
 
   const pending = resolved?.productId !== item.productId
-  return <Viewer3d item={item} settings={payload.settings} fabric={{ slots: resolved?.slots ?? [] }} fabricPending={pending} />
+  return (
+    <Viewer3d
+      item={item}
+      settings={payload.settings}
+      fabric={{ slots: resolved?.slots ?? [], realCm: resolved?.realCm ?? null, scaleAxis: resolved?.scaleAxis ?? 'height' }}
+      fabricPending={pending}
+    />
+  )
 }
 
 export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps) {

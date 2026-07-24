@@ -71,6 +71,15 @@ export type FabricBundle = {
   modelId: string
   modelUrl: string
   format: P3dFormat
+  // The product's real overall size along `scaleAxis`, in centimetres, for this
+  // variation - the same measurement the configurator uses to tile fabric at true
+  // scale (see realCm in lib/fabric/resolve.ts). Null when the size source did not
+  // resolve. The stage viewer reuses it to place the model at life size in AR, so a
+  // boardroom table arrives table-sized rather than at the owner's global guess.
+  realCm: number | null
+  // Which axis realCm measures - 'height' (Y) or 'width' (X). Needed to turn one
+  // dimension into an AR scale factor against the model's measured extent.
+  scaleAxis: 'height' | 'width'
   slots: Array<{
     // The exact glTF material name to paint on the model.
     materialName: string

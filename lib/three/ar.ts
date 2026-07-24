@@ -23,41 +23,65 @@
 // beyond calling the matching launcher.
 
 import type { Object3D, WebGLRenderer } from 'three'
-import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
 
-// Which AR route a given device+model has, or null for "no AR button at all".
+// Which AR route this device has, or null for "no AR button at all".
 export type ArKind = 'webxr' | 'quicklook' | null
 
-// frameModel normalises every model into a box whose longest side is this many
-// three.js units (fitTo = 2). Real-world sizing divides by it: a holder scaled by
-// metres/UNIT_BOX makes the model's longest dimension `metres` metres, since one
-// USD/WebXR unit is one metre.
-const UNIT_BOX = 2
+// How to size the model in the real world. AR renders at one metre per unit, and
+// frameModel has already normalised the model to a 2-unit longest side with no
+// real-world scale of its own, so a factor has to be found from something that
+// knows the true size.
+//
+//   - realMetres + axis: the product's actual overall size (height or width) in
+//     metres, which the fabric configurator already measures per variation (its
+//     `realCm` along `scaleAxis`). When present this is exact: scale so the model's
+//     extent along that axis equals realMetres, and every other axis follows.
+//   - fallbackMetres: the owner's one global guess (arRealWorldMetres, longest side
+//     in metres), used for a product the configurator has no measurement for - a
+//     plain 3D product, or a fabric one whose size source did not resolve.
+//
+// A boardroom table at the 1m fallback lands doll-sized; its real 2.4m width, which
+// the shop has already typed in for fabric tiling, lands it right. That is the whole
+// reason to prefer the measured value.
+export type ArSizing = {
+  realMetres: number | null
+  axis: 'height' | 'width'
+  fallbackMetres: number
+}
 
-// Only glTF-family models get an AR button. AR needs PBR materials with an
-// environment to look like anything (the same reason the stage lights an
-// environment - see load-model), and it needs a clean node/material graph the
-// USDZExporter and WebXR both understand. GLB/glTF give that; OBJ has no material
-// model to speak of, and FBX/3DS arrive as whatever their converter emitted, so a
-// USDZ baked from one is a coin toss. Rather than ship an AR button that produces
-// a black blob on half the catalogue, the offer is limited to the format that
-// actually carries the materials. The stage viewer still shows all of them.
-function formatSupportsAr(format: P3dFormat): boolean {
-  return format === 'glb' || format === 'gltf'
+// The uniform scale to put on the model's holder, from the model's measured size at
+// scale 1 (longest side ~2 after frameModel) and the sizing intent above.
+function holderScaleFor(size: { x: number; y: number; z: number }, sizing: ArSizing): number {
+  if (sizing.realMetres && sizing.realMetres > 0) {
+    const axisExtent = sizing.axis === 'width' ? size.x : size.y
+    if (axisExtent > 0) return sizing.realMetres / axisExtent
+  }
+  const longest = Math.max(size.x, size.y, size.z)
+  return longest > 0 ? Math.max(sizing.fallbackMetres, 0.05) / longest : 1
 }
 
 /**
- * Which AR mechanism this device can use for this model, if any. Cheap enough to
- * call on mount: the WebXR probe is a single async support query and the Quick
- * Look one is a synchronous capability check on an anchor element.
+ * Which AR mechanism this device can use, if any. Cheap enough to call on mount:
+ * the WebXR probe is a single async support query and the Quick Look one is a
+ * synchronous capability check on an anchor element.
+ *
+ * Deliberately format-blind. AR does NOT export the uploaded file - it exports the
+ * three.js scene the viewer has already built, and by then every format the module
+ * accepts has been normalised to the same PBR materials (`normaliseMaterials` in
+ * load-model), so an FBX or OBJ that renders on the stage exports to AR exactly as
+ * a GLB does. The rule is simply "if you can see it turning, you can see it in your
+ * room". The one thing that can still defeat an iOS bake is a model whose textures
+ * will not read back (a compressed-texture edge case), and that fails gracefully:
+ * the USDZ bake throws, the caller catches it, and the button just does not appear
+ * on that device - the WebXR path, which renders the live scene and bakes nothing,
+ * is unaffected.
  *
  * WebXR is preferred where both somehow report available (a desktop Chrome with an
  * XR emulator, say): it keeps the render in our own hands and reflects a live
  * fabric change without re-baking anything. Quick Look is the iOS-only fallback.
  */
-export async function detectArSupport(format: P3dFormat): Promise<ArKind> {
+export async function detectArSupport(): Promise<ArKind> {
   if (typeof window === 'undefined') return null
-  if (!formatSupportsAr(format)) return null
 
   // WebXR immersive-ar. `navigator.xr` is absent on every browser that has no
   // WebXR at all (all of iOS, desktop Safari, older Android), so the optional
@@ -73,8 +97,7 @@ export async function detectArSupport(format: P3dFormat): Promise<ArKind> {
 
   // Apple AR Quick Look. The honest feature test is whether an <a> element's
   // relList knows the `ar` relation, which only Safari-family browsers on AR-
-  // capable Apple hardware report. It says nothing about the model, which is why
-  // the format gate above runs first.
+  // capable Apple hardware report.
   const anchor = document.createElement('a')
   if (anchor.relList && anchor.relList.supports && anchor.relList.supports('ar')) {
     return 'quicklook'
@@ -109,21 +132,22 @@ export async function detectArSupport(format: P3dFormat): Promise<ArKind> {
  * transform is silently dropped and the model exports at its raw authored size.
  * The holder is also where real-world sizing and the base-on-floor lift go.
  */
-export async function bakeUsdzUrl(model: Object3D, opts: { metres: number }): Promise<string> {
-  const { Scene, Group, Box3 } = await import('three')
+export async function bakeUsdzUrl(model: Object3D, sizing: ArSizing): Promise<string> {
+  const { Scene, Group, Box3, Vector3 } = await import('three')
   const { USDZExporter } = await import('three/examples/jsm/exporters/USDZExporter.js')
 
   const scene = new Scene()
   const holder = new Group()
-  // metres/UNIT_BOX turns the normalised 2-unit model into one `metres` metres
-  // long. Clamped defensively: a zero or negative value from a corrupt setting
-  // would collapse the model to a point, and Quick Look shows nothing for it.
-  const scale = Math.max(opts.metres, 0.05) / UNIT_BOX
-  holder.scale.setScalar(scale)
-
   const exportModel = model.clone(true)
   holder.add(exportModel)
   scene.add(holder)
+
+  // Measure the model at scale 1 (longest side ~2 after frameModel) and turn the
+  // real-world size into a uniform factor - the product's true height/width when
+  // the configurator knows it, the owner's longest-side guess otherwise.
+  scene.updateMatrixWorld(true)
+  const size = new Box3().setFromObject(holder).getSize(new Vector3())
+  holder.scale.setScalar(holderScaleFor(size, sizing))
 
   // Sit the model's base on the ground plane rather than its centre, so it lands
   // on the floor the way the real object would. Measured after scaling, off the
@@ -160,7 +184,7 @@ export async function bakeUsdzUrl(model: Object3D, opts: { metres: number }): Pr
 export async function startWebXrAr(
   renderer: WebGLRenderer,
   model: Object3D,
-  opts: { metres: number; registerEnd?: (end: (() => void) | null) => void },
+  opts: ArSizing & { registerEnd?: (end: (() => void) | null) => void },
 ): Promise<void> {
   const THREE = await import('three')
   const { Scene, Group, PerspectiveCamera, Box3, Vector3, RingGeometry, MeshBasicMaterial, Mesh, HemisphereLight, DirectionalLight } = THREE
@@ -234,13 +258,14 @@ export async function startWebXrAr(
   // the shopper's pinch-resize all act on the holder while the model keeps its own
   // framing transform intact for the restore at the end.
   const holder = new Group()
-  const baseScale = Math.max(opts.metres, 0.05) / UNIT_BOX
   holder.add(model)
-  // Lift so the base sits at the holder's origin: place the holder on the floor and
-  // the model stands on it. Measured at scale 1 then applied, so the lift is in the
-  // model's own framed units and survives any later resize (which scales the whole
-  // holder, origin included).
+  // Measure the model at scale 1 (holder identity, so pivot rotation is gone and the
+  // box is axis-true), turn the real-world size into a factor, and lift so the base
+  // sits at the holder's origin - place the holder on the floor and the model stands
+  // on it. The lift is in the model's own framed units and survives any later resize,
+  // which scales the whole holder, origin included.
   const localBox = new Box3().setFromObject(model)
+  const baseScale = holderScaleFor(localBox.getSize(new Vector3()), opts)
   model.position.y -= localBox.min.y
   holder.scale.setScalar(baseScale)
   holder.visible = false

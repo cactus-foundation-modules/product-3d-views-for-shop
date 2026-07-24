@@ -329,7 +329,7 @@ export function composeFabricBundle(
   // browser by a second road: the public /fabric/<child> endpoint, which hands out
   // a model url to anyone who asks. Same treatment, same reasoning - the token is
   // stamped on the way out and the stored row keeps the plain url.
-  return { modelId: model.id, modelUrl: signAssetUrl(model.url), format: model.format, slots }
+  return { modelId: model.id, modelUrl: signAssetUrl(model.url), format: model.format, realCm, scaleAxis: config.scaleAxis, slots }
 }
 
 /**

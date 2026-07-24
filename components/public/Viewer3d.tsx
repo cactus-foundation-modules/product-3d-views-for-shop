@@ -66,8 +66,14 @@ function takeCarriedView(): CarriedView | null {
 
 // The fabric configurator's paints for the model on the stage: which named
 // material to texture, with what and at what tile density. Optional - a viewer
-// with no `fabric` prop behaves exactly as it always has.
-type FabricPaints = { slots: FabricBundle['slots'] }
+// with no `fabric` prop behaves exactly as it always has. `realCm`/`scaleAxis`
+// carry the product's true overall size (from the same configurator measurement
+// that scales the weave), which the AR path uses to place the model at life size.
+type FabricPaints = {
+  slots: FabricBundle['slots']
+  realCm?: number | null
+  scaleAxis?: 'height' | 'width'
+}
 
 // How far one arrow-key press moves the view. Turn is coarser than tilt because a
 // model is normally looked at from around its own eye level - going round it is the
@@ -1012,32 +1018,50 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fabricSignature, builtUrl])
 
-  // Which AR route this device has for this model, decided once when the viewer
-  // mounts and re-decided if the model format or the owner's AR toggle changes.
-  // Device capability, so it does not wait on the model building - but it is gated
+  // Which AR route this device has, decided once when the viewer mounts and
+  // re-decided if the owner's AR toggle changes. Pure device capability - it does
+  // not depend on the model or its format (AR exports the rendered scene, not the
+  // uploaded file), so it neither waits on the build nor re-runs per model. Gated
   // on arEnabled here so a switched-off owner never even probes.
   useEffect(() => {
     let cancelled = false
     // Off resolves to null down the same async path rather than a synchronous
     // setState in the effect body - a sync setState here would risk a cascading
     // re-render and the linter rightly flags it.
-    const probe = settings.arEnabled ? detectArSupport(item.format) : Promise.resolve<ArKind>(null)
+    const probe = settings.arEnabled ? detectArSupport() : Promise.resolve<ArKind>(null)
     probe.then((kind) => { if (!cancelled) setArKind(kind) })
     return () => { cancelled = true }
-  }, [item.format, settings.arEnabled])
+  }, [settings.arEnabled])
 
   // Pre-bake the Quick Look USDZ, and re-bake it when the fabric changes, so the
   // anchor the shopper taps always carries a URL for the look currently on the
   // stage. Only on the Quick Look path, only once the model is built, and each new
   // bake revokes the one it replaces. builtUrl fires it when the model finishes;
   // fabricSignature fires it on every colour change, exactly as the repaint effect.
+  //
+  // CRUCIALLY it waits for the paint to settle. A fabric change starts an async
+  // repaint (see the repaint effect - it fetches textures, then stamps them), and
+  // baking the moment the signature changes snapshots the model BEFORE the new
+  // material lands, so the USDZ carried the old or unpainted look - "materials from
+  // the options don't show in AR". Gating on `painting`/`fabricPending` means the
+  // bake fires only once both are false: the model is fully painted with the current
+  // colours, and the re-run when they clear is what does the real bake.
   useEffect(() => {
     if (arKind !== 'quicklook') return
+    if (painting || fabricPending) return
     const model = modelRef.current
     if (!model || builtUrlRef.current !== item.url) return
     let cancelled = false
     let made: string | null = null
-    bakeUsdzUrl(model, { metres: settings.arRealWorldMetres })
+    // The product's true size when the configurator has measured it (realCm along
+    // its scale axis), else the owner's global longest-side guess. This is what puts
+    // a boardroom table on the floor table-sized rather than at a default metre.
+    const sizing = {
+      realMetres: fabric?.realCm ? fabric.realCm / 100 : null,
+      axis: fabric?.scaleAxis ?? 'height',
+      fallbackMetres: settings.arRealWorldMetres,
+    } as const
+    bakeUsdzUrl(model, sizing)
       .then((url) => {
         if (cancelled) { URL.revokeObjectURL(url); return }
         made = url
@@ -1049,7 +1073,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     // fixed for the life of a storefront page like the rest of settings, and the
     // admin preview does not surface the AR button.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [arKind, fabricSignature, builtUrl, item.url])
+  }, [arKind, fabricSignature, builtUrl, item.url, painting, fabricPending, fabric?.realCm, fabric?.scaleAxis])
 
   // Launch WebXR AR. Quick Look needs none of this - it is a plain anchor tap in
   // the markup - so this handler is the immersive path only: park the stage loop,
@@ -1063,7 +1087,9 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     parkLoopRef.current?.()
     try {
       await startWebXrAr(renderer, model, {
-        metres: settings.arRealWorldMetres,
+        realMetres: fabric?.realCm ? fabric.realCm / 100 : null,
+        axis: fabric?.scaleAxis ?? 'height',
+        fallbackMetres: settings.arRealWorldMetres,
         registerEnd: (end) => { arEnderRef.current = end },
       })
     } catch {
