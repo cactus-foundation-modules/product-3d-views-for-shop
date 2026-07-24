@@ -164,6 +164,13 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   // config rather than in each slot, so it survives a slot's material changing and
   // is merged into the slots only at save.
   const [densities, setDensities] = useState<Record<string, number>>({})
+  // The material names a measurement pass has actually READ this session, as
+  // opposed to the ones merely seeded from the saved config. A density of 0 means
+  // two entirely different things either side of that line - "nobody has measured
+  // this yet" versus "the model was read and it has no texture map to measure" -
+  // and only the second is worth telling the admin about, because no amount of
+  // pressing Detect will change it.
+  const [measuredNames, setMeasuredNames] = useState<Set<string>>(new Set())
   const [measuring, setMeasuring] = useState(false)
   const [saving, setSaving] = useState(false)
   // Set on load when the saved config has lost the measurement for a model now
@@ -295,6 +302,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const applyMeasurement = useCallback((m: Measurement) => {
     setMaterialNames(m.names)
     setDensities((prev) => ({ ...prev, ...m.densities }))
+    setMeasuredNames((prev) => new Set([...prev, ...Object.keys(m.densities)]))
     setConfig((c) => ({
       ...c,
       modelHeights: { ...c.modelHeights, ...m.heights },
@@ -339,10 +347,18 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     measureConfigured(faceModel, configuredIds, models)
       .then((m) => {
         applyMeasurement(m)
+        // A model whose every part measures zero has been read perfectly well and
+        // has nothing to measure: no texture map (UV) coordinates on the mesh. Said
+        // outright, because the alternative reads as a dead button - the parts are
+        // listed, the press looks like it worked, and every part then sits on "not
+        // measured - use Detect", inviting the admin to press it again for ever.
+        const unmeasurable = m.names.length > 0 && m.names.every((n) => (m.densities[n] ?? 0) <= 0)
         setMessage(
-          m.names.length > 0
-            ? { kind: 'ok', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` }
-            : { kind: 'err', text: 'That model has no named materials to texture. Re-export it with its materials named, then try again.' },
+          m.names.length === 0
+            ? { kind: 'err', text: 'That model has no named materials to texture. Re-export it with its materials named, then try again.' }
+            : unmeasurable
+              ? { kind: 'err', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} (${m.names.join(', ')}), but this model carries no texture map, so there is nothing to measure the finish against. Re-export it with its UV mapping included and upload it again.` }
+              : { kind: 'ok', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` },
         )
       })
       .catch((error) => {
@@ -593,6 +609,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         )}
         {config.slots.map((slot, i) => {
           const measured = (densities[slot.materialName] ?? 0) > 0
+          // Read, and came back with nothing to read: the mesh has no texture map.
+          // A different sentence from "not measured", because Detect is the answer
+          // to one of them and no answer at all to the other.
+          const unmeasurable = !measured && measuredNames.has(slot.materialName)
           // A part painted a fixed colour has no swatch and so nothing to scale or
           // turn: its size, rotation and "measured" tag are all beside the point and
           // would only invite the admin to fill in numbers that do nothing.
@@ -696,7 +716,11 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                 </span>
               ) : (
                 <span className={`p3d-fab-tag ${measured ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
-                  {measured ? 'texture scale measured' : 'not measured - use Detect'}
+                  {measured
+                    ? 'texture scale measured'
+                    : unmeasurable
+                      ? 'no texture map in this model'
+                      : 'not measured - use Detect'}
                 </span>
               )}
               <span className="p3d-fab-spacer" />
