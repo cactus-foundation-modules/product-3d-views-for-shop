@@ -152,6 +152,24 @@ export const P3dConfigSchema = z
     // questions: a site owner may well want the viewer still and the thumbnails
     // turning, and the thumbnails are the cheaper of the two to leave running.
     thumbnailAutoRotate: z.boolean().default(true),
+
+    // --- Augmented reality ------------------------------------------------
+
+    // The "View in your room" button on the stage viewer. On by default: it is a
+    // new capability the owner asked for, and it shows itself only where it can
+    // actually work - a phone that supports AR, looking at a glTF model - so an
+    // install that never opens this tab still shows nothing on a desktop, and
+    // nothing on a model AR cannot handle. Turning it off hides the button
+    // everywhere regardless of device.
+    arEnabled: z.boolean().default(true),
+    // How large the model appears when it lands on the floor, measured as its
+    // longest dimension in metres. The models are normalised for the on-screen
+    // viewer and carry no real-world scale of their own, so this is the one number
+    // that decides whether a chair arrives chair-sized or dolls-house-sized. 1m
+    // suits most furniture as an opening guess; the shopper can pinch to adjust
+    // from there. Clamped to a range that keeps the model both visible and
+    // placeable in a normal room.
+    arRealWorldMetres: z.number().min(0.1).max(10).default(1),
   })
   // A maxDistance at or below minDistance leaves OrbitControls with an empty
   // range: the model locks at one distance and the scroll wheel does nothing,

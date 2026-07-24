@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { detectArSupport, bakeUsdzUrl, startWebXrAr, type ArKind } from '@/modules/product-3d-views-for-shop/lib/three/ar'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
@@ -152,6 +153,33 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // A stable signature of the paints, so the repaint effect fires on a colour change
   // (same model, new textures) but not on every parent render handing a fresh object.
   const fabricSignature = JSON.stringify(fabric?.slots ?? [])
+
+  // Which AR route this device has for this model, decided once the viewer is up
+  // (see the detection effect below). Null until decided, and null for good on a
+  // device or model with no AR path - the button keys off it. 'webxr' renders in
+  // our own canvas via an immersive-ar session; 'quicklook' hands a baked USDZ to
+  // Apple AR Quick Look. See lib/three/ar.ts for the split.
+  const [arKind, setArKind] = useState<ArKind>(null)
+  // True while a WebXR session is starting or running, purely to keep the button
+  // from being pressed twice into two overlapping sessions.
+  const [arBusy, setArBusy] = useState(false)
+  // The pre-baked USDZ for Apple AR Quick Look, as a blob URL sat waiting on the
+  // anchor the shopper taps. Baked ahead of the tap and re-baked on a fabric
+  // change (see the effect below), because Quick Look must be reached from a live
+  // user activation and an export inside the click handler spends it. Null on any
+  // device that is not using the Quick Look path.
+  const [usdzUrl, setUsdzUrl] = useState<string | null>(null)
+  // How the WebXR session parks and unparks the stage's own render loop. AR drives
+  // frames through renderer.setAnimationLoop and owns renderer.xr, which cannot run
+  // alongside the requestAnimationFrame loop build() sets up - so the loop is
+  // parked before a session and unparked after. Set by build(), null between builds.
+  const parkLoopRef = useRef<(() => void) | null>(null)
+  const unparkLoopRef = useRef<(() => void) | null>(null)
+  // A way to end a live AR session from outside its own promise, so a client-side
+  // navigation away from the product page mid-session closes AR rather than tearing
+  // the model out from under a running immersive session. Set by startWebXrAr while
+  // a session is up, nulled when it ends.
+  const arEnderRef = useRef<(() => void) | null>(null)
 
   // Surviving a lost WebGL context.
   //
@@ -807,6 +835,21 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         loop(lastFrameAt)
         setStatus('ready')
 
+        // How an AR session borrows the renderer. WebXR drives its own frames and
+        // owns renderer.xr, so the stage's requestAnimationFrame loop has to stop
+        // first (park) and start again when AR ends (unpark) - two loops rendering
+        // the one renderer would fight over it. Unpark re-bases the clock and asks
+        // for a frame, and only restarts the loop if the stage is actually on
+        // screen, so it does not resurrect a loop the IntersectionObserver parked.
+        parkLoopRef.current = () => {
+          if (frame !== null) { cancelAnimationFrame(frame); frame = null }
+        }
+        unparkLoopRef.current = () => {
+          lastFrameAt = performance.now()
+          invalidate()
+          if (frame === null && onScreen) loop(lastFrameAt)
+        }
+
         dispose = () => {
           // Captured first, while the camera, target and pivot still hold the view
           // the shopper was looking at. The next build (same component on a model
@@ -854,6 +897,8 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           modelRef.current = null
           builtUrlRef.current = null
           resetRef.current = null
+          parkLoopRef.current = null
+          unparkLoopRef.current = null
           rendererRef.current = null
           disposeModel(model)
           disposeEnvironment(renderer)
@@ -967,6 +1012,77 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fabricSignature, builtUrl])
 
+  // Which AR route this device has for this model, decided once when the viewer
+  // mounts and re-decided if the model format or the owner's AR toggle changes.
+  // Device capability, so it does not wait on the model building - but it is gated
+  // on arEnabled here so a switched-off owner never even probes.
+  useEffect(() => {
+    let cancelled = false
+    // Off resolves to null down the same async path rather than a synchronous
+    // setState in the effect body - a sync setState here would risk a cascading
+    // re-render and the linter rightly flags it.
+    const probe = settings.arEnabled ? detectArSupport(item.format) : Promise.resolve<ArKind>(null)
+    probe.then((kind) => { if (!cancelled) setArKind(kind) })
+    return () => { cancelled = true }
+  }, [item.format, settings.arEnabled])
+
+  // Pre-bake the Quick Look USDZ, and re-bake it when the fabric changes, so the
+  // anchor the shopper taps always carries a URL for the look currently on the
+  // stage. Only on the Quick Look path, only once the model is built, and each new
+  // bake revokes the one it replaces. builtUrl fires it when the model finishes;
+  // fabricSignature fires it on every colour change, exactly as the repaint effect.
+  useEffect(() => {
+    if (arKind !== 'quicklook') return
+    const model = modelRef.current
+    if (!model || builtUrlRef.current !== item.url) return
+    let cancelled = false
+    let made: string | null = null
+    bakeUsdzUrl(model, { metres: settings.arRealWorldMetres })
+      .then((url) => {
+        if (cancelled) { URL.revokeObjectURL(url); return }
+        made = url
+        setUsdzUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return url })
+      })
+      .catch(() => { /* A model USDZExporter cannot bake leaves the button off. */ })
+    return () => { cancelled = true; if (made) { URL.revokeObjectURL(made); setUsdzUrl(null) } }
+    // arRealWorldMetres is read for the bake but does not belong in the deps: it is
+    // fixed for the life of a storefront page like the rest of settings, and the
+    // admin preview does not surface the AR button.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arKind, fabricSignature, builtUrl, item.url])
+
+  // Launch WebXR AR. Quick Look needs none of this - it is a plain anchor tap in
+  // the markup - so this handler is the immersive path only: park the stage loop,
+  // run the session to its end, then unpark. Errors (a declined camera prompt, a
+  // device that offers immersive-ar but not hit-test) leave the stage untouched.
+  const onWebXrClick = async (): Promise<void> => {
+    const renderer = rendererRef.current
+    const model = modelRef.current
+    if (!renderer || !model || arBusy) return
+    setArBusy(true)
+    parkLoopRef.current?.()
+    try {
+      await startWebXrAr(renderer, model, {
+        metres: settings.arRealWorldMetres,
+        registerEnd: (end) => { arEnderRef.current = end },
+      })
+    } catch {
+      /* Nothing to show: the session never took, and the stage is as it was. */
+    } finally {
+      arEnderRef.current = null
+      unparkLoopRef.current?.()
+      setArBusy(false)
+    }
+  }
+
+  // End any live AR session if the viewer unmounts under it - a client-side
+  // navigation away from the product page mid-session would otherwise dispose the
+  // model while the immersive session still holds it. Revoke a waiting USDZ too.
+  useEffect(() => {
+    const revoke = (): void => setUsdzUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
+    return () => { arEnderRef.current?.(); revoke() }
+  }, [])
+
   return (
     <div className="p3d-stage" ref={hostRef}>
       {/* Focusable, and labelled with what it is and how it works, because a canvas
@@ -1038,6 +1154,42 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           Reset view
         </button>
       )}
+      {/* "View in your room": shown only where the device has a working AR path for
+          this model and the owner has left AR on. Two shapes behind one look. The
+          WebXR path is a real button that starts an immersive session in this very
+          canvas. The Quick Look path is an <a rel="ar">, because Apple only opens
+          AR from a genuine tap on such an anchor with its href already set - hence
+          the pre-baked usdzUrl, and hence the button appearing only once it exists.
+          The <img> child is Apple's requirement, not decoration; the visible label
+          is its sibling. */}
+      {status === 'ready' && settings.arEnabled && arKind === 'webxr' && (
+        <button type="button" className="p3d-ar" onClick={() => void onWebXrClick()} disabled={arBusy}>
+          <ArIcon />
+          <span>View in your room</span>
+        </button>
+      )}
+      {status === 'ready' && settings.arEnabled && arKind === 'quicklook' && usdzUrl && (
+        <a className="p3d-ar" rel="ar" href={usdzUrl}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- Apple AR Quick Look requires a literal <img> child inside a rel="ar" anchor; next/image emits a wrapper that breaks the launch */}
+          <img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="" aria-hidden="true" className="p3d-ar-img" />
+          <ArIcon />
+          <span>View in your room</span>
+        </a>
+      )}
     </div>
+  )
+}
+
+// The AR button's glyph: a cube in outline, matched to the button's text colour
+// via currentColor so it reads on both the light and dark chrome without a second
+// token. Marked hidden from assistive tech - the button's own text says what it is.
+function ArIcon() {
+  return (
+    <svg className="p3d-ar-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"
+      fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2 3 7v10l9 5 9-5V7z" />
+      <path d="M3 7l9 5 9-5" />
+      <path d="M12 12v10" />
+    </svg>
   )
 }

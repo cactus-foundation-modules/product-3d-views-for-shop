@@ -362,6 +362,32 @@ export function Settings3dTab() {
         </div>
       </div>
 
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <h3 style={sectionHeading}>View in your room (AR)</h3>
+        <p style={sectionNote}>
+          Adds a &ldquo;View in your room&rdquo; button to the main viewer that stands the product on the
+          shopper&rsquo;s own floor through their phone&rsquo;s camera. It shows up only on phones that can do
+          it, and only on models it can handle, so there is nothing to see on a desktop. Nothing extra is
+          uploaded: whatever finish the shopper has picked is what appears in the room.
+        </p>
+
+        <label style={checkboxRow}>
+          <input type="checkbox" checked={config.arEnabled} onChange={(e) => set('arEnabled', e.target.checked)} />
+          Offer &ldquo;View in your room&rdquo; where the phone supports it
+        </label>
+
+        <div style={fieldGrid}>
+          <SliderField
+            label="Real-world size"
+            value={config.arRealWorldMetres}
+            min={0.1} max={10} step={0.1}
+            disabled={!config.arEnabled}
+            onChange={(v) => set('arRealWorldMetres', v)}
+            help="The product's longest side, in metres, when it first lands on the floor. The shopper can pinch to fine-tune from there. Around 1 suits most furniture."
+          />
+        </div>
+      </div>
+
       <div className="card">
         <h3 style={sectionHeading}>Speed</h3>
         <p style={sectionNote}>

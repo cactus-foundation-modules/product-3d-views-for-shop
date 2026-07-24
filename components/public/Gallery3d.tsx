@@ -53,6 +53,35 @@ const css = `
   background:var(--color-fg);color:var(--color-bg);opacity:.6;white-space:nowrap;
   transition:opacity .15s ease}
 .p3d-reset:hover,.p3d-reset:focus-visible{opacity:.9}
+/* "View in your room". Bottom-left, opposite the Reset button, above the centred
+   hint. One rule covers both shapes it takes (a <button> for WebXR, an <a rel="ar">
+   for Quick Look) - both carry the p3d-ar class. Solid fill on the theme's own
+   tokens so it reads on any stage background, and it is a real target, so unlike
+   the hint it takes pointer and keyboard events. */
+.p3d-ar{position:absolute;left:8px;bottom:8px;z-index:2;cursor:pointer;border:none;
+  display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:11px;
+  font-weight:600;line-height:1;padding:6px 10px;border-radius:999px;text-decoration:none;
+  background:var(--color-fg);color:var(--color-bg);opacity:.85;white-space:nowrap;
+  transition:opacity .15s ease}
+.p3d-ar:hover,.p3d-ar:focus-visible{opacity:1}
+.p3d-ar:disabled{opacity:.5;cursor:default}
+.p3d-ar-icon{flex:none}
+/* Apple requires an <img> child inside the rel="ar" anchor, but ours is only there
+   to satisfy that - the visible glyph is the SVG. Kept in the layout at zero size
+   rather than display:none, which some WebKit builds have treated as "no img". */
+.p3d-ar-img{width:0;height:0}
+/* The WebXR dom-overlay: our close button and hint drawn over the live camera feed
+   while an immersive session runs. Appended to <body>, so it is fixed to the
+   viewport rather than the stage, and it inherits the theme tokens from :root like
+   any other element. pointer-events none on the root lets taps through to the AR
+   scene (placing the model); the close button turns them back on for itself. */
+.p3d-ar-overlay{position:fixed;inset:0;z-index:9999;pointer-events:none}
+.p3d-ar-close{position:absolute;top:16px;right:16px;pointer-events:auto;cursor:pointer;
+  width:40px;height:40px;border:none;border-radius:50%;font-size:18px;line-height:1;
+  background:var(--color-fg);color:var(--color-bg);opacity:.9}
+.p3d-ar-hint{position:absolute;left:50%;bottom:32px;transform:translateX(-50%);margin:0;
+  pointer-events:none;font-size:13px;line-height:1;padding:8px 14px;border-radius:999px;
+  background:var(--color-fg);color:var(--color-bg);opacity:.85;white-space:nowrap}
 /* The material-loading skeleton (see Viewer3d): a slow sheen across the stage plus a
    spinner pill, layered over the still-visible model. Held invisible for the first
    .15s so a colour that lands from cache never flashes it - the animation IS the
@@ -80,7 +109,7 @@ const css = `
   .p3d-material-wait::before{animation:none}
   .p3d-material-spinner{animation:none;border-top-color:var(--color-bg);opacity:.5}
 }
-@media (prefers-reduced-motion:reduce){.p3d-reset{transition:none}}
+@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
 
