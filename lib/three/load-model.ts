@@ -524,16 +524,71 @@ const textureCache = new Map<string, Promise<Texture>>()
 // the repaint path (applyFabricPaint from a colour change) does not have to hand.
 const MAX_ANISOTROPY = 16
 
+/**
+ * The `<img>` already on the page showing this exact picture, when there is one and it
+ * is safe to hand to the GPU.
+ *
+ * On a fabric product the shopper has been looking at these pictures since the page
+ * loaded: the colour picker renders every swatch as a thumbnail. Painting one is then a
+ * second fetch of a file the browser has already downloaded AND decoded, and the decode
+ * is not free - a swatch photograph is a full-size image being shown at 28px. Adopting
+ * the element hands three the finished bitmap, so the pick costs the GPU upload and
+ * nothing else.
+ *
+ * Three conditions, each of which is a real failure if skipped:
+ *
+ *  - Finished loading. An element still in flight has no pixels, and one that failed
+ *    reports a natural width of 0.
+ *  - CORS-clean. WebGL refuses to upload a cross-origin image the browser did not fetch
+ *    with CORS, and it throws rather than drawing something wrong - which would take the
+ *    whole paint with it. `crossOrigin` reflects the attribute the element carried when
+ *    its load started, which is the only thing that makes the pixels readable; a
+ *    same-origin picture is readable regardless.
+ *  - Same url. Compared against both `src` and `currentSrc`, since a responsive image
+ *    picked from a srcset is showing a DIFFERENT file from the one we were asked for.
+ *
+ * Null whenever the page has no such element, which is the ordinary case for a
+ * thumbnail warming a colour the shopper has not scrolled to yet - the loader below
+ * then fetches it as it always did.
+ */
+function adoptablePageImage(url: string): HTMLImageElement | null {
+  if (typeof document === 'undefined') return null
+  let sameOrigin = false
+  try {
+    sameOrigin = new URL(url, location.href).origin === location.origin
+  } catch {
+    return null
+  }
+  for (const image of Array.from(document.images)) {
+    if (image.currentSrc !== url && image.src !== url) continue
+    if (!image.complete || image.naturalWidth === 0) continue
+    if (!sameOrigin && image.crossOrigin !== 'anonymous' && image.crossOrigin !== 'use-credentials') continue
+    return image
+  }
+  return null
+}
+
 async function loadTexture(url: string): Promise<Texture> {
   let entry = textureCache.get(url)
   if (!entry) {
-    const { TextureLoader } = await import('three')
-    // A failed load must not poison the cache, so a reselect after the connection
-    // came back gets a fresh attempt rather than the old rejection handed back.
-    entry = new TextureLoader().loadAsync(url).catch((error) => {
-      textureCache.delete(url)
-      throw error
-    })
+    const three = await import('three')
+    const adopted = adoptablePageImage(url)
+    if (adopted) {
+      // Exactly what TextureLoader builds once its own fetch lands - a Texture wrapping
+      // the image, marked for upload - minus the fetch and the decode. Every paint
+      // clones this master and the clones share its source, so the picture reaches the
+      // GPU once however many parts are painted from it.
+      const texture = new three.Texture(adopted)
+      texture.needsUpdate = true
+      entry = Promise.resolve(texture)
+    } else {
+      // A failed load must not poison the cache, so a reselect after the connection
+      // came back gets a fresh attempt rather than the old rejection handed back.
+      entry = new three.TextureLoader().loadAsync(url).catch((error) => {
+        textureCache.delete(url)
+        throw error
+      })
+    }
     textureCache.set(url, entry)
   }
   return entry

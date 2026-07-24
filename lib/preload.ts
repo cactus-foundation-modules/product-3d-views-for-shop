@@ -48,10 +48,30 @@ export async function preloadProductAssets(payload: P3dPayload, signal: AbortSig
     seen.add(item.url)
     return true
   })
-  await pooled(models, signal, (item) => prefetchModel(item.url, item.format))
 
+  // Side by side, NOT models-then-swatches. Changing colour is the commonest thing a
+  // shopper does on a configurable product and a swatch is a fraction of the weight of
+  // a model, so queueing the swatches behind a size run of a dozen GLBs warmed them
+  // several seconds too late - long after the shopper had picked a colour and watched
+  // it arrive. Each half keeps its own bounded width, so the two together are still a
+  // background trickle rather than a stampede.
+  await Promise.all([
+    pooled(models, signal, (item) => prefetchModel(item.url, item.format)),
+    preloadSwatchTextures(payload, signal),
+  ])
+}
+
+/**
+ * Warm the texture cache for every swatch the product's variations could paint.
+ *
+ * Where the picker already shows a swatch, this is nearly free: the browser has the
+ * file and the loader adopts the picture straight off the page (see load-model.ts), so
+ * the warm-up is a GPU upload rather than a download. Where it does not - a colour on
+ * an option the shopper has yet to open - this is what fetches it ahead of time.
+ */
+async function preloadSwatchTextures(payload: P3dPayload, signal: AbortSignal): Promise<void> {
   // Only fabric-configured products have swatches to warm; every other product's
-  // colours are just the model itself, already covered above.
+  // colours are just the model itself, already covered by the model pass.
   if (signal.aborted || !payload.fabric) return
 
   try {
