@@ -663,6 +663,54 @@ describe('composeFabricBundle', () => {
     )
     expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
   })
+
+  // A product-level helping - a leg finish that never changes across the range, an
+  // overall height that is the same on every variation - is ticked once on the parent
+  // product rather than per variant, so the resolver hands those values over beside the
+  // variation's own (see resolveFabricForChild). A part pointed at one has to paint from
+  // it; before the parent was read at all, the slot was dropped from the bundle entirely
+  // and the legs on Deskwell's Oslo desks rendered unpainted.
+  it('paints from a product-level value the variation does not carry itself', () => {
+    const bundle = composeFabricBundle(
+      config({
+        heightAttributeId: ATTR_HEIGHT,
+        slots: [slot({ materialName: 'Legs', colourOptionId: attributeColourId(ATTR_FINISH) })],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      // Both inherited from the parent: this variation has no attribute values of its own.
+      [
+        { attributeId: ATTR_HEIGHT, assignmentId: 'help-height', label: '200cm' },
+        { attributeId: ATTR_FINISH, assignmentId: 'help-leg-finish', label: 'Natural Wood', swatch: CRAB_URL, swatchSize: '10x10cm' },
+      ],
+    )
+    // 200 / (100 * 1 * 10) = 0.2 - painted AND scaled off the product-level values.
+    expect(bundle?.slots).toEqual([
+      { materialName: 'Legs', textureUrl: CRAB_URL, colour: null, repeat: 0.2, rotationDeg: 0 },
+    ])
+  })
+
+  // The ordering the resolver relies on: it lists the variation's own values first and
+  // the parent's after, and every lookup here takes the first match. A variation that
+  // overrides a product-level finish must show its own, not the parent's.
+  it('prefers the variation own value over the product-level one for the same attribute', () => {
+    const bundle = composeFabricBundle(
+      config({
+        heightAttributeId: ATTR_HEIGHT,
+        slots: [slot({ materialName: 'Legs', colourOptionId: attributeColourId(ATTR_FINISH) })],
+      }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_FINISH, assignmentId: 'help-leg-finish', label: 'Teal', swatch: TEAL_URL, swatchSize: '10x10cm' },
+        { attributeId: ATTR_HEIGHT, assignmentId: 'help-height', label: '200cm' },
+        { attributeId: ATTR_FINISH, assignmentId: 'help-leg-finish', label: 'Natural Wood', swatch: CRAB_URL, swatchSize: '10x10cm' },
+      ],
+    )
+    expect(bundle?.slots[0]?.textureUrl).toBe(TEAL_URL)
+  })
 })
 
 describe('parseHexColour', () => {

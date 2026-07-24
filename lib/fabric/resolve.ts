@@ -173,9 +173,11 @@ function isHttpUrl(value: string): boolean {
 // pointed at a variation option rather than at an attribute - a shop that records
 // the size as a chooser on the Variations screen has the number here and nowhere else.
 export type SelectedOptionValue = { optionId: string; valueId: string; swatch: string | null; label?: string | null }
-// One attribute value assigned to a variant child. Carries both halves of what an
-// attribute value can say: its `label` (the real-world size or overall height, read
-// by parseSwatchCm) and its `swatch` (the picture that paints a material part).
+// One attribute value in force on a variant child - either ticked on the child
+// itself or inherited from the parent product (see resolveFabricForChild). Carries
+// both halves of what an attribute value can say: its `label` (the real-world size
+// or overall height, read by parseSwatchCm) and its `swatch` (the picture that
+// paints a material part).
 // Which of the two is used depends on where the config points at the attribute, not
 // on the value itself - an "Oak" finish attribute has no useful number in its label
 // and a "20x20cm" swatch-size attribute has no picture.
@@ -204,6 +206,11 @@ export type ChildSizeValue = {
  * unambiguous case keeps its old id rather than being migrated. Both are read here
  * so one lookup serves either, and so every config saved before helpings existed
  * keeps resolving untouched.
+ *
+ * Every caller takes the FIRST match in the list, which is what makes a value ticked
+ * on the variation itself beat one inherited from the parent product: the resolver
+ * hands the two over in that order (see resolveFabricForChild). Anything that
+ * reorders that list changes which value paints.
  */
 function matchesSource(value: ChildSizeValue, id: string): boolean {
   return value.assignmentId === id || value.attributeId === id
@@ -221,6 +228,11 @@ function matchesSource(value: ChildSizeValue, id: string): boolean {
  * height or its width, whichever the config pins its real-world size by (0 when
  * uncalibrated). Picking the right one of the two is the caller's job, since the
  * caller is what turns a model id into a measurement in the first place.
+ *
+ * `sizes` is ORDERED: where two of its entries answer to the same config id, the
+ * earlier one wins. That is what makes a value ticked on the variation beat the same
+ * attribute's product-level value on the parent, so a caller assembling the list from
+ * both must put the variation's own first.
  */
 export function composeFabricBundle(
   config: FabricConfig,
@@ -398,7 +410,8 @@ export function tileRepeat(input: {
  * the parent product when the variation has none of its own. Keyed by the child
  * product id because that is what shop's gallery contract hands us (activeProductId)
  * and because the size lives on the child; the parent id comes alongside so the
- * fallback and the model-height lookup have the whole product tree to read.
+ * fallback, the attribute-value fallback and the model-height lookup have the whole
+ * product tree to read.
  */
 export async function resolveFabricForChild(
   childProductId: string,
@@ -419,11 +432,28 @@ export async function resolveFabricForChild(
     WHERE v."child_product_id" = ${childProductId}
   `
 
-  // The child's attribute values - the per-slot swatch sizes, the model's overall
-  // height and any material picture set as an attribute rather than as a variation
-  // option all ride in here (all pat_attributes). Without product-attributes
+  // The attribute values in force on this variation - the per-slot swatch sizes, the
+  // model's overall height and any material picture set as an attribute rather than as
+  // a variation option all ride in here (all pat_attributes). Without product-attributes
   // there are none, so tiling stays uncalibrated (repeat 1) and only the colour is
   // applied, which composeFabricBundle handles.
+  //
+  // Read from the CHILD and from the PARENT, child first, because product-attributes
+  // stores an attribute value in one of two places depending on what it describes. A
+  // helping marked "use for variations" is ticked per variant child; one that is not is
+  // ticked once on the parent and describes the whole product - a leg finish that never
+  // changes across the range, or an overall height that is the same on every variation.
+  // Reading only the child made every product-level helping invisible here: a part
+  // pointed at one was silently dropped from the bundle (no swatch, so no slot) and an
+  // overall size pointed at one left the whole product at repeat 1, both while the
+  // configurator happily offered the attribute and showed it configured. Deskwell's Oslo
+  // back-to-back desks are exactly that shape - a product-level "Leg Finish" that painted
+  // nothing on the storefront.
+  //
+  // Same fallback the model itself already takes a few lines below (the variation's own
+  // model, else the parent's), and on the same reasoning: the parent is where a fact true
+  // of every variation is recorded.
+  //
   // `assignment_id` says which HELPING the value was ticked under, so a product
   // using one attribute twice ("Seat fabric" and "Back fabric" off one Fabric
   // vocabulary) resolves each part from its own value instead of whichever row the
@@ -435,12 +465,28 @@ export async function resolveFabricForChild(
   // is too old to have them, rather than branching the whole query per combination:
   // one statement, and the shape handed back is the same either way.
   const hasAttributes = await hasAttributeTables()
-  const assignmentCol = hasAttributes && (await hasAttributeHelpings())
-    ? Prisma.sql`pv."assignment_id"`
-    : Prisma.sql`NULL::text`
+  const helpings = hasAttributes && (await hasAttributeHelpings())
+  const assignmentCol = helpings ? Prisma.sql`pv."assignment_id"` : Prisma.sql`NULL::text`
   const swatchSizeCol = hasAttributes && (await hasSwatchSizes())
     ? Prisma.sql`av."swatch_size"`
     : Prisma.sql`NULL::text`
+  // A parent value belonging to a PER-VARIATION helping is not inherited. That flag is
+  // product-attributes' own statement that the value is set per variant, so treating a
+  // stray parent row as a default for the variations that have none would put a colour
+  // on a part the shop deliberately left unset - and would do it invisibly. Only applied
+  // where the companion module is new enough to have helpings at all; without them every
+  // value is product-level by definition, which is precisely what inheriting them all is.
+  const inheritable = helpings
+    ? Prisma.sql`
+        AND (
+          pv."product_id" = ${childProductId}
+          OR pv."assignment_id" IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM "pat_product_attributes" ppa
+            WHERE ppa."id" = pv."assignment_id" AND ppa."use_for_variations" = true
+          )
+        )`
+    : Prisma.empty
   const sizes: ChildSizeValue[] = !hasAttributes
     ? []
     : await prisma.$queryRaw<ChildSizeValue[]>`
@@ -449,7 +495,9 @@ export async function resolveFabricForChild(
         FROM "pat_product_values" pv
         JOIN "pat_attribute_values" av ON av."id" = pv."value_id"
         JOIN "pat_attributes" a ON a."id" = av."attribute_id"
-        WHERE pv."product_id" = ${childProductId}
+        WHERE pv."product_id" IN (${childProductId}, ${parentProductId})
+        ${inheritable}
+        ORDER BY (pv."product_id" = ${childProductId}) DESC
       `
 
   // Every picture swatch that has been given a real-world size, keyed by the picture
