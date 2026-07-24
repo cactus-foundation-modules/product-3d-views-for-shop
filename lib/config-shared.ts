@@ -78,6 +78,13 @@ export const P3dConfigSchema = z
       .string()
       .regex(/^#[0-9a-fA-F]{6}$/, 'Background colour must be a hex value like #f5f5f5')
       .default('#f5f5f5'),
+    // Painted instead of backgroundColour when the shopper's device is in dark
+    // mode, so a light colour picked for the light theme doesn't glare. Same
+    // field, same validation, just a second value for the other half of the day.
+    backgroundColourDark: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/, 'Background colour must be a hex value like #f5f5f5')
+      .default('#333333'),
 
     // --- Controls ---------------------------------------------------------
 

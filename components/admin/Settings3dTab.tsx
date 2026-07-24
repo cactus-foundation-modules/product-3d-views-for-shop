@@ -259,7 +259,18 @@ export function Settings3dTab() {
               onChange={(e) => set('backgroundColour', e.target.value)}
               style={{ height: '2.5rem', padding: '0.25rem' }}
             />
-            <span style={hint}>Used only when the background is set to a solid colour.</span>
+            <span style={hint}>Used only when the background is set to a solid colour, for shoppers in light mode.</span>
+          </div>
+          <div className="field" style={{ margin: 0, opacity: config.background === 'colour' ? 1 : 0.5 }}>
+            <label>Background colour (dark mode)</label>
+            <input
+              type="color"
+              value={config.backgroundColourDark}
+              disabled={config.background !== 'colour'}
+              onChange={(e) => set('backgroundColourDark', e.target.value)}
+              style={{ height: '2.5rem', padding: '0.25rem' }}
+            />
+            <span style={hint}>Used only when the background is set to a solid colour, for shoppers in dark mode.</span>
           </div>
         </div>
       </div>

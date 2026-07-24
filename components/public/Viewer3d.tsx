@@ -331,7 +331,10 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         // environment shows the studio the model is lit by, softly blurred so a
         // reflective product's reflections have somewhere to come from.
         if (settings.background === 'colour') {
-          scene.background = new Color(settings.backgroundColour)
+          // data-theme is the site's own light/dark verdict (it can override the OS
+          // preference), so that's the truth to follow rather than matchMedia direct.
+          const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+          scene.background = new Color(isDark ? settings.backgroundColourDark : settings.backgroundColour)
         } else if (settings.background === 'environment') {
           scene.background = scene.environment
           scene.backgroundBlurriness = 0.3
