@@ -15,6 +15,24 @@ import type { P3dPayload } from '@/modules/product-3d-views-for-shop/lib/types'
 // sensible time. Models and textures each get their own run at this width.
 const CONCURRENCY = 3
 
+// The most VARIATION models the background warm-up will fetch ahead of the shopper.
+// The parent's own models (the opening view) are always warmed and do not count
+// against this - only the per-variation files a shape/width change would swap in do.
+//
+// A big product breaks the old "warm everything" assumption badly: an Impulse screen
+// range is five shapes across a dozen widths, so payload.items carried ~48 distinct
+// GLBs and the preload fetched all of them on first paint - tens of megabytes racing
+// the swatch textures for one cold connection. Since a COLOUR change (the commonest
+// thing a shopper does, and the one they complained was slow) repaints the SAME model
+// in place and needs no new file at all, those models were starving the very fetch the
+// shopper was waiting on. Capped, the swatches get the pipe; a shape past the ceiling
+// simply loads on demand when picked (the model cache shares that fetch), which costs
+// the one shopper who reaches it one wait rather than every shopper the whole matrix.
+//
+// Twelve, because a single shape's full width run is about that, so a typical product
+// still warms completely and only a large multi-shape matrix is trimmed.
+const PRELOAD_MODEL_CEILING = 12
+
 // Run `task` over `items` at a bounded width, stopping between items the moment the
 // signal aborts (a shopper leaving the page). Failures inside `task` are the task's
 // own to swallow - the prefetch helpers already do.
@@ -31,34 +49,56 @@ async function pooled<T>(items: T[], signal: AbortSignal, task: (item: T) => Pro
 }
 
 /**
- * Preload every model file on the page, then - for a fabric-configured product - every
- * unique swatch texture its variations could paint. Resolves when done or aborted.
+ * Preload the model files and swatch textures a shopper is most likely to reach, so a
+ * variation change paints from memory rather than fetching. Resolves when done or aborted.
  *
- * Models come straight off the gallery payload: every variation's url is already there,
- * deduped here so a size run pointing a dozen variations at one model warms it once.
- * Swatch urls do NOT travel in the payload (it carries option ids, not resolved swatch
- * urls), so they are fetched once from the module's /swatches endpoint, which lists the
- * distinct swatches - a handful - rather than the storefront resolving one bundle per
- * variation child.
+ * Ordered by what the opening view and the commonest action actually need, not by what
+ * exists. The parent's own models (what the strip shows before any pick) and the swatch
+ * textures (what a colour change paints with) go first and together; the per-variation
+ * models a shape/width change would swap in trail behind, capped, since on a large matrix
+ * they are tens of megabytes the shopper is not yet waiting on and every one fetched now
+ * is bandwidth taken from the swatch they are.
+ *
+ * Models come straight off the gallery payload, deduped by url so a size run pointing a
+ * dozen variations at one file warms it once. Swatch urls do NOT travel in the payload
+ * (it carries option ids, not resolved swatch urls), so they are fetched once from the
+ * module's /swatches endpoint, which lists the distinct swatches - a handful.
  */
 export async function preloadProductAssets(payload: P3dPayload, signal: AbortSignal): Promise<void> {
+  // Distinct model files, split by whether they belong to the product itself or to a
+  // variation. The parent's own are the opening view and are always warmed; the
+  // variation files are the ones a big matrix has too many of.
   const seen = new Set<string>()
-  const models = payload.items.filter((item) => {
-    if (seen.has(item.url)) return false
+  const parentModels: P3dPayload['items'] = []
+  const variationModels: P3dPayload['items'] = []
+  for (const item of payload.items) {
+    if (seen.has(item.url)) continue
     seen.add(item.url)
-    return true
-  })
+    ;(item.productId === payload.parentProductId ? parentModels : variationModels).push(item)
+  }
 
-  // Side by side, NOT models-then-swatches. Changing colour is the commonest thing a
-  // shopper does on a configurable product and a swatch is a fraction of the weight of
-  // a model, so queueing the swatches behind a size run of a dozen GLBs warmed them
-  // several seconds too late - long after the shopper had picked a colour and watched
-  // it arrive. Each half keeps its own bounded width, so the two together are still a
-  // background trickle rather than a stampede.
+  // What the shopper is looking at now (the parent's own model) and what a colour change
+  // needs (the swatches), side by side and ahead of everything else. Neither is capped:
+  // the parent models are a small set, and the swatches are the whole point on a fabric
+  // product - starving them behind a size run of GLBs was the original complaint.
   await Promise.all([
-    pooled(models, signal, (item) => prefetchModel(item.url, item.format)),
+    pooled(parentModels, signal, (item) => prefetchModel(item.url, item.format)),
     preloadSwatchTextures(payload, signal),
   ])
+  if (signal.aborted) return
+
+  // Then the variation models a shape/width change would swap in, capped so a large
+  // multi-shape range does not flood the connection on first paint. Anything past the
+  // ceiling loads on demand when its variation is picked (the model cache shares that
+  // fetch), so nothing is lost - only deferred off the cold-cache critical path.
+  const warm = variationModels.slice(0, PRELOAD_MODEL_CEILING)
+  const deferred = variationModels.length - warm.length
+  if (deferred > 0) {
+    // Not silent: a bounded preload that quietly dropped two-thirds of a catalogue would
+    // read as "everything is warm" when it is not.
+    console.info(`[product-3d-views] preloading ${warm.length} of ${variationModels.length} variation models; ${deferred} load on demand`)
+  }
+  await pooled(warm, signal, (item) => prefetchModel(item.url, item.format))
 }
 
 /**
