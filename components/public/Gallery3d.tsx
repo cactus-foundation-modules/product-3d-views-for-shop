@@ -53,6 +53,33 @@ const css = `
   background:var(--color-fg);color:var(--color-bg);opacity:.6;white-space:nowrap;
   transition:opacity .15s ease}
 .p3d-reset:hover,.p3d-reset:focus-visible{opacity:.9}
+/* The material-loading skeleton (see Viewer3d): a slow sheen across the stage plus a
+   spinner pill, layered over the still-visible model. Held invisible for the first
+   .15s so a colour that lands from cache never flashes it - the animation IS the
+   delay, so no JavaScript timer to clean up. pointer-events none throughout: a
+   shopper can keep turning the model while its fabric catches up. */
+.p3d-material-wait{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden;
+  opacity:0;animation:p3d-wait-in .2s ease .15s forwards}
+.p3d-material-wait::before{content:'';position:absolute;inset:0;
+  background:linear-gradient(105deg,transparent 35%,var(--color-bg) 50%,transparent 65%);
+  background-size:250% 100%;opacity:.35;animation:p3d-shimmer 1.4s linear infinite}
+.p3d-material-pill{position:absolute;left:50%;top:12px;transform:translateX(-50%);
+  display:inline-flex;align-items:center;gap:6px;font-size:11px;line-height:1;
+  padding:5px 9px;border-radius:999px;background:var(--color-fg);color:var(--color-bg);
+  opacity:.85;white-space:nowrap}
+.p3d-material-spinner{width:10px;height:10px;flex:none;border-radius:50%;
+  border:2px solid var(--color-bg);border-top-color:transparent;
+  animation:p3d-spin .7s linear infinite}
+@keyframes p3d-wait-in{to{opacity:1}}
+@keyframes p3d-shimmer{from{background-position:200% 0}to{background-position:-50% 0}}
+@keyframes p3d-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  /* No sheen and no spin. The fade-in stays: an opacity change is not the kind of
+     motion the preference asks off, and its .15s delay is what stops a cached
+     colour flashing the overlay. */
+  .p3d-material-wait::before{animation:none}
+  .p3d-material-spinner{animation:none;border-top-color:var(--color-bg);opacity:.5}
+}
 @media (prefers-reduced-motion:reduce){.p3d-reset{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
@@ -345,7 +372,18 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
   // is about to change, so holding the old texture for that moment reads as the colour
   // updating, where blanking to unpainted would read as the model breaking and coming
   // back.
-  const [slots, setSlots] = useState<FabricBundle['slots'] | null>(null)
+  // The landed slots, TAGGED with the variation they resolved for. The tag is what
+  // says whether the current variation's bundle is still in flight - `pending` below
+  // is derived from it on render rather than juggled as a second piece of state, so
+  // the two can never disagree. While pending, the PREVIOUS variation's slots keep
+  // painting the model (holding the old colour reads as the colour updating, where
+  // blanking would read as the model breaking), and the viewer shows its
+  // material-loading skeleton over the top via fabricPending - the shopper's wait
+  // starts at the colour click, not at the moment the resolved slots begin painting,
+  // and without this the first (server) half of that wait showed nothing at all. A
+  // cached bundle resolves on the spot, and the overlay's own appearance delay keeps
+  // that instant round-trip invisible.
+  const [resolved, setResolved] = useState<{ productId: string; slots: FabricBundle['slots'] } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -354,15 +392,16 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
         // A variation the resolver could not place (missing config, absent companion
         // tables) resolves to no paints, and the model stays on the stage unpainted
         // rather than vanishing.
-        if (!cancelled) setSlots(bundle?.slots ?? [])
+        if (!cancelled) setResolved({ productId: item.productId, slots: bundle?.slots ?? [] })
       })
-      .catch(() => { if (!cancelled) setSlots([]) })
+      .catch(() => { if (!cancelled) setResolved({ productId: item.productId, slots: [] }) })
     return () => { cancelled = true }
     // payload.parentProductId is page-static; the variation whose model this is drives
     // the fetch, and a cached bundle resolves on the spot.
   }, [payload.parentProductId, item.productId])
 
-  return <Viewer3d item={item} settings={payload.settings} fabric={{ slots: slots ?? [] }} />
+  const pending = resolved?.productId !== item.productId
+  return <Viewer3d item={item} settings={payload.settings} fabric={{ slots: resolved?.slots ?? [] }} fabricPending={pending} />
 }
 
 export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps) {

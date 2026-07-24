@@ -86,10 +86,18 @@ const KEY_ZOOM = 1.15
 // where the restore path would have been tidier.
 const CONTEXT_RESTORE_TIMEOUT_MS = 1500
 
-export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: P3dConfig; fabric?: FabricPaints }) {
+export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dItem; settings: P3dConfig; fabric?: FabricPaints; fabricPending?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [status, setStatus] = useState<Status>('loading')
+  // True while the repaint effect below is fetching and applying new fabric
+  // textures onto the built model. Together with `fabricPending` (the parent's
+  // "the resolved colours themselves are still on their way" - see PaintedStage)
+  // it drives the material-loading skeleton over the stage, so a shopper who has
+  // just picked a colour can see the viewer is working on it rather than
+  // wondering whether the click took. The overlay's CSS delays its own
+  // appearance, so a cached colour that lands in a frame or two never flashes it.
+  const [painting, setPainting] = useState(false)
   // Bumped whenever the WebGL context is lost, which rebuilds the entire viewer onto a
   // brand new canvas element (see the `key` on the canvas below). A lost context takes
   // every geometry, texture and shader on the GPU with it, so there is nothing to
@@ -916,28 +924,38 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
     let cancelled = false
     const applied = appliedRef.current
     ;(async () => {
-      for (const slot of fabric?.slots ?? []) {
-        // The texture is fetched BEFORE the cancelled check, not inside
-        // applyFabricPaint alone: applyFabricPaint stamps the material the moment
-        // its await resolves, so a slow fetch for a colour the shopper has since
-        // left could land after the newer colour's near-instant cached paint and
-        // stamp the stale texture over it. Warming the cache first turns the
-        // stamp itself near-synchronous, and the cancelled check between the two
-        // stops the superseded run before it can touch the material.
-        // A flat-colour slot has no texture to warm; the paint below is synchronous
-        // for it either way.
-        if (slot.textureUrl) await prefetchTexture(slot.textureUrl)
-        if (cancelled) return
-        const tex = await applyFabricPaint(model, slot)
-        if (cancelled) { tex?.dispose(); continue }
-        const previous = applied.get(slot.materialName)
-        if (previous && previous !== tex) previous.dispose()
-        if (tex) applied.set(slot.materialName, tex)
-        // Per slot rather than once at the end: a repaint of several materials then
-        // shows each as it lands, instead of all of them on whichever frame happens to
-        // follow the last. The loop draws nothing on its own now, so without this a
-        // colour change on a still model would sit in the scene graph unseen.
-        invalidateRef.current?.()
+      // The skeleton goes up before the first await and comes down in the
+      // `finally`, so it covers the texture fetches exactly. A superseded run
+      // (colour changed again mid-fetch) clears it on its way out and the newer
+      // run raises it again in the same breath - React batches the pair, so the
+      // overlay never blinks between them.
+      if ((fabric?.slots ?? []).length > 0) setPainting(true)
+      try {
+        for (const slot of fabric?.slots ?? []) {
+          // The texture is fetched BEFORE the cancelled check, not inside
+          // applyFabricPaint alone: applyFabricPaint stamps the material the moment
+          // its await resolves, so a slow fetch for a colour the shopper has since
+          // left could land after the newer colour's near-instant cached paint and
+          // stamp the stale texture over it. Warming the cache first turns the
+          // stamp itself near-synchronous, and the cancelled check between the two
+          // stops the superseded run before it can touch the material.
+          // A flat-colour slot has no texture to warm; the paint below is synchronous
+          // for it either way.
+          if (slot.textureUrl) await prefetchTexture(slot.textureUrl)
+          if (cancelled) return
+          const tex = await applyFabricPaint(model, slot)
+          if (cancelled) { tex?.dispose(); continue }
+          const previous = applied.get(slot.materialName)
+          if (previous && previous !== tex) previous.dispose()
+          if (tex) applied.set(slot.materialName, tex)
+          // Per slot rather than once at the end: a repaint of several materials then
+          // shows each as it lands, instead of all of them on whichever frame happens to
+          // follow the last. The loop draws nothing on its own now, so without this a
+          // colour change on a still model would sit in the scene graph unseen.
+          invalidateRef.current?.()
+        }
+      } finally {
+        setPainting(false)
       }
     })()
     return () => { cancelled = true }
@@ -976,6 +994,23 @@ export function Viewer3d({ item, settings, fabric }: { item: P3dItem; settings: 
         <p className="p3d-note">
           This 3D model could not be loaded. The product&rsquo;s photographs are still in the strip below.
         </p>
+      )}
+      {/* The material-loading skeleton: a soft shimmer across the stage and a pill
+          saying so, shown while a freshly picked colour's textures are being fetched
+          and painted (`painting`), or while the resolved colours themselves are still
+          on their way from the server (`fabricPending`). The model stays visible and
+          draggable underneath - the old colour holding on IS the design (see
+          PaintedStage) - so this is an overlay, not a replacement. Its CSS delays its
+          own appearance a beat, so a colour served from cache never flashes it.
+          role="status" lets a screen reader hear the wait end without the pill ever
+          taking focus. */}
+      {status === 'ready' && (painting || fabricPending) && (
+        <div className="p3d-material-wait" role="status">
+          <span className="p3d-material-pill">
+            <span className="p3d-material-spinner" aria-hidden="true" />
+            Loading material…
+          </span>
+        </div>
       )}
       {/* Says the thing that is not discoverable: that this picture can be
           dragged. Goes the moment they do it, having made its point.
