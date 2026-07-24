@@ -845,7 +845,20 @@ export async function frameModel(scene: Scene, model: Object3D, fitTo = 2): Prom
   // A degenerate box (an empty or unparseable model) would divide by zero and
   // scale the thing to infinity, so leave it alone and let it render as whatever
   // it is rather than as NaN.
-  if (largest > 0 && Number.isFinite(largest)) model.scale.setScalar(fitTo / largest)
+  //
+  // MULTIPLIED into whatever scale the root already carries, never assigned over
+  // it. The box above was measured in WORLD space, so it already has that scale
+  // baked in - assigning `fitTo / largest` throws the old factor away and leaves
+  // the model out by exactly it. FBXLoader is where this bites: it puts the
+  // file's unit conversion on the root it hands back (a centimetre file arrives
+  // scaled 100), so a desk measuring 160 world units was reset from 100 to
+  // 0.0125 and drew at 1/100th of the intended size - a single grey pixel in the
+  // middle of an empty stage, with no error anywhere to say why. GLTFLoader
+  // returns a scale of 1, which is why every GLB looked fine and hid this.
+  //
+  // Multiplying also preserves a non-uniform root scale, which assigning would
+  // flatten into a cube of the wrong proportions.
+  if (largest > 0 && Number.isFinite(largest)) model.scale.multiplyScalar(fitTo / largest)
 
   // Re-measured after scaling rather than multiplying the old centre through:
   // the two agree for a plain scale and stop agreeing the moment a loader hands

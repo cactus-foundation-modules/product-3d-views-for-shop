@@ -69,7 +69,23 @@ function guessByName<T>(name: string, list: T[], getName: (item: T) => string): 
 // bounding box the file has already been parsed for, so the second costs nothing, and
 // storing both means changing the axis re-scales on the spot rather than silently
 // falling back to repeat 1 until someone thinks to press Detect.
-type Measurement = { names: string[]; densities: Record<string, number>; heights: Record<string, number>; widths: Record<string, number> }
+// `unreadable` is every file this pass could not open, named. One product's models
+// are read as a set, and a set used to be all-or-nothing: the first file that would
+// not load threw, and the whole measurement went with it - so a single deleted
+// object left every OTHER model on the product unmeasured and the admin holding one
+// sentence that named no file at all. A model that cannot be read is now skipped and
+// listed, and the files that CAN be read are measured regardless.
+type Unreadable = { filename: string; reason: string }
+type Measurement = {
+  names: string[]
+  densities: Record<string, number>
+  heights: Record<string, number>
+  widths: Record<string, number>
+  unreadable: Unreadable[]
+}
+
+const reasonFor = (error: unknown): string =>
+  error instanceof Error && error.message ? error.message : 'the file could not be loaded'
 
 async function measureConfigured(
   faceModel: P3dAdminModel | undefined,
@@ -78,10 +94,17 @@ async function measureConfigured(
 ): Promise<Measurement> {
   const heights: Record<string, number> = {}
   const widths: Record<string, number> = {}
+  const unreadable: Unreadable[] = []
   for (const id of configuredIds) {
     const model = allModels.find((m) => m.id === id)
     if (!model) continue
-    const object = await loadModel(model.url, model.format)
+    let object
+    try {
+      object = await loadModel(model.url, model.format)
+    } catch (error) {
+      unreadable.push({ filename: model.filename, reason: reasonFor(error) })
+      continue
+    }
     // Keyed by the model's URL, never its p3d_models id: the number describes the
     // file, and the rows come and go. Detaching and re-attaching the same model
     // across a product's variations writes a fresh row per variation, which used to
@@ -99,11 +122,26 @@ async function measureConfigured(
   const densities: Record<string, number> = {}
   let names: string[] = []
   if (faceModel) {
-    const object = await loadModel(faceModel.url, faceModel.format)
-    names = collectMaterialNamesFrom(object)
-    for (const name of names) densities[name] = await measureTexelDensity(object, name)
+    // The face model failing is worse than any other one failing - there are no
+    // material names without it, and the parts list is what the whole panel is for -
+    // but it is still reported rather than thrown, so the message can name the file
+    // instead of leaving the admin to guess which of a product's models it meant.
+    try {
+      const object = await loadModel(faceModel.url, faceModel.format)
+      names = collectMaterialNamesFrom(object)
+      for (const name of names) densities[name] = await measureTexelDensity(object, name)
+    } catch (error) {
+      if (!unreadable.some((u) => u.filename === faceModel.filename)) {
+        unreadable.push({ filename: faceModel.filename, reason: reasonFor(error) })
+      }
+    }
   }
-  return { names, densities, heights, widths }
+  return { names, densities, heights, widths, unreadable }
+}
+
+/** "“a.glb” (404 Not Found)", joined - what the messages below put in front of the admin. */
+function describeUnreadable(unreadable: Unreadable[]): string {
+  return unreadable.map((u) => `“${u.filename}” (${u.reason})`).join(', ')
 }
 
 const css = `
@@ -318,16 +356,24 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     if (models.length === 0) return
     let cancelled = false
     measureConfigured(faceModel, configuredIds, models)
-      .then((m) => { if (!cancelled) applyMeasurement(m) })
-      .catch((error) => {
+      .then((m) => {
+        if (cancelled) return
+        applyMeasurement(m)
         // Silent when nothing depended on it - the admin has asked for nothing and the
         // Detect button says its own piece. But a measurement that was putting a lost
         // calibration back is the one thing on this screen the admin never asked for
         // and most needs told about: it leaves the product scaling wrongly on the shop.
+        if (!needsHeal || m.unreadable.length === 0) return
+        setMessage({
+          kind: 'err',
+          text: `This product's finishes are being drawn at the wrong size, and ${m.unreadable.length === 1 ? 'a model' : 'some models'} could not be re-read to fix it: ${describeUnreadable(m.unreadable)}.`,
+        })
+      })
+      .catch((error) => {
         if (cancelled || !needsHeal) return
         setMessage({
           kind: 'err',
-          text: `This product's finishes are being drawn at the wrong size and the models could not be re-read to fix it: ${error instanceof Error ? error.message : 'the file could not be loaded'}.`,
+          text: `This product's finishes are being drawn at the wrong size and the models could not be re-read to fix it: ${reasonFor(error)}.`,
         })
       })
     return () => { cancelled = true }
@@ -353,16 +399,31 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         // listed, the press looks like it worked, and every part then sits on "not
         // measured - use Detect", inviting the admin to press it again for ever.
         const unmeasurable = m.names.length > 0 && m.names.every((n) => (m.densities[n] ?? 0) <= 0)
+        // A file that would not open is reported first and by name, whatever else the
+        // pass managed. "No named materials" is the wrong thing to say about a model
+        // nobody could read - it sends the admin off to re-export a file that was
+        // never the problem - so the unreadable list takes precedence over it, and
+        // still says how much of the product WAS read when some of it was.
+        const failed = m.unreadable.length > 0
+          ? `${m.unreadable.length === 1 ? 'A model on this product could not be read' : `${m.unreadable.length} models on this product could not be read`}: ${describeUnreadable(m.unreadable)}.`
+          : ''
         setMessage(
-          m.names.length === 0
-            ? { kind: 'err', text: 'That model has no named materials to texture. Re-export it with its materials named, then try again.' }
-            : unmeasurable
-              ? { kind: 'err', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} (${m.names.join(', ')}), but this model carries no texture map, so there is nothing to measure the finish against. Re-export it with its UV mapping included and upload it again.` }
-              : { kind: 'ok', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` },
+          failed
+            ? {
+                kind: 'err',
+                text: m.names.length > 0
+                  ? `${failed} The rest read fine - ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'}: ${m.names.join(', ')}.`
+                  : failed,
+              }
+            : m.names.length === 0
+              ? { kind: 'err', text: 'That model has no named materials to texture. Re-export it with its materials named, then try again.' }
+              : unmeasurable
+                ? { kind: 'err', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} (${m.names.join(', ')}), but this model carries no texture map, so there is nothing to measure the finish against. Re-export it with its UV mapping included and upload it again.` }
+                : { kind: 'ok', text: `Read ${m.names.length} material ${m.names.length === 1 ? 'part' : 'parts'} from the model: ${m.names.join(', ')}.` },
         )
       })
       .catch((error) => {
-        setMessage({ kind: 'err', text: `Could not read the model: ${error instanceof Error ? error.message : 'the file could not be loaded'}.` })
+        setMessage({ kind: 'err', text: `Could not read the model: ${reasonFor(error)}.` })
       })
       .finally(() => setMeasuring(false))
   }
