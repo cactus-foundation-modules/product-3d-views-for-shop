@@ -230,18 +230,18 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
 
   if (items.length === 0) return null
 
-  // Same rule the stage uses to decide painted vs plain (see Gallery3dStage): a
-  // variation's own model, on a product configured for fabric, is live-coloured -
-  // and that has to include its thumbnail, or the small picture in the strip
-  // shows the file's original colours while the big view the shopper is looking
-  // at shows the ones they actually chose.
-  const painted = (item: P3dItem): boolean => Boolean(data.fabric) && item.productId !== data.parentProductId
+  // Same rule the stage uses to decide painted vs plain (see Gallery3dStage): every
+  // model on a product configured for fabric is live-coloured - and that has to
+  // include the thumbnails, or the small picture in the strip shows the file's
+  // original colours while the big view the shopper is looking at shows the ones
+  // they actually chose.
+  const painted = Boolean(data.fabric)
 
   return (
     <>
       <Style />
       {items.map((item) =>
-        painted(item) ? (
+        painted ? (
           <PaintedThumb3d
             key={item.key}
             payload={data}
@@ -374,10 +374,20 @@ export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps)
   const item = data.items.find((i) => i.key === itemKey) ?? null
   if (!item) return null
 
-  // A variation's own model, on a product configured for fabric, is painted live
-  // from that variation's chosen colours. The product's own models (and any model
-  // on a product with no fabric config) show as plain 3D views.
-  const painted = Boolean(data.fabric) && item.productId !== data.parentProductId
+  // Every model on a product configured for fabric is painted live, the product's
+  // own generic view included. A model on a product with no fabric config shows as
+  // a plain 3D view.
+  //
+  // The product's own model used to be excluded, on the reasoning that there is
+  // nothing to paint it with until the shopper has settled on a whole combination.
+  // That was only ever half true, and stopped being true at all once the resolver
+  // learned to read PRODUCT-LEVEL attribute values: a finish that is the same across
+  // the whole range - a leg colour, a powder-coated frame - is known before a single
+  // option is picked, so leaving the opening view unpainted showed the raw file
+  // colours and then snapped to the real finish the moment a variation resolved. The
+  // parts that genuinely do depend on the shopper's choices simply resolve to nothing
+  // for this model and stay as the file has them, which is what they always did.
+  const painted = Boolean(data.fabric)
   return (
     <>
       <Style />
