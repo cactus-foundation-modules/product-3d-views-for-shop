@@ -61,18 +61,32 @@ export type P3dPayload = {
   fabric: FabricConfig | null
 }
 
-// What the card-media provider hands its overlay, via shop's `shop.card-media`
-// point, to show a model on a product CARD in a grid. One model - the product's own
-// where it has one, else a variation's painted with that variation's fabric - plus
-// the viewer settings. JSON-serialisable: it crosses the RSC boundary as a plain
-// prop, exactly like P3dPayload.
-export type P3dCardPayload = {
+// One model ready for the card viewer: the file, and the fabric paints (or null for
+// a plain, unpainted model). The `fabric` shape matches Viewer3d's `fabric` prop.
+export type P3dCardModel = {
   item: P3dItem
-  settings: P3dConfig
-  // The variation's resolved fabric paints, or null for a plain (unpainted) model -
-  // a product's own model on a card, where no combination has been chosen. The shape
-  // matches Viewer3d's `fabric` prop, so it passes straight through.
   fabric: { slots: FabricBundle['slots']; realCm: number | null; scaleAxis: 'height' | 'width' } | null
+}
+
+// What the card-media provider hands its overlay, via shop's `shop.card-media` point,
+// to show a model on a product CARD in a grid. The overlay picks WHICH model by the
+// variation the shopper is looking at (the carousel's active image), so a payload
+// carries more than one: JSON-serialisable, crosses the RSC boundary as a plain prop.
+export type P3dCardPayload = {
+  settings: P3dConfig
+  parentProductId: string
+  // True when the product has a fabric configurator config. The overlay then fetches
+  // the current variation's painted bundle live from `/fabric/[child]` (model + its
+  // material), rather than the provider resolving every variation up front.
+  hasFabric: boolean
+  // Per-variation OWN models for NON-fabric products (child product id -> model),
+  // where a variation carries its own model file. Empty for fabric products, whose
+  // per-variation model+material is fetched live instead.
+  byVariation: Record<string, P3dCardModel>
+  // Shown when no variation is in view (the product's own photo), or when the current
+  // variation has no model of its own to show: the product's own model, else the first
+  // variation that has one. Always present - a payload with no model is never emitted.
+  fallback: P3dCardModel
 }
 
 // A fabric configurator resolution for one variant child: which model to draw and

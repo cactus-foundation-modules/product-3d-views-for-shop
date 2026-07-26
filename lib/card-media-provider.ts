@@ -1,30 +1,31 @@
 // Fills shop's `shop.card-media` point with a "view in 3D" overlay for product
 // cards. For each product in a grid that has a model somewhere in its tree, this
-// resolves the one model to show on its card and hands it, with the viewer settings,
-// to the CardModel3dOverlay client component. A product with no model at all is
-// simply absent from the map, so its card shows no icon and loads no viewer.
+// hands the CardModel3dOverlay client component what it needs to show the right
+// model for whichever photo the shopper is looking at. A product with no model
+// anywhere is absent from the map, so its card shows no icon and loads no viewer.
 //
-// Which model:
-//   - the product's OWN model where it has one (shown unpainted - a card has no
-//     chosen combination to paint from); else
-//   - the first enabled VARIATION that has a model, painted with that variation's
-//     fabric where the product is configured for it (the "including its material"
-//     the request asks for), or plain otherwise.
+// Which model the overlay ends up showing (decided client-side from the card's
+// active image):
+//   - a variation photo on a FABRIC product -> that variation's model painted with
+//     its material, fetched live from `/fabric/[child]` (the same endpoint the detail
+//     gallery uses); the provider only flags `hasFabric` so nothing is resolved per
+//     variation up front;
+//   - a variation photo on a NON-fabric product -> that variation's own model file,
+//     from `byVariation` (resolved here, cheap - it is just the model row);
+//   - the product's own photo, or a variation with nothing of its own -> `fallback`
+//     (the product's own model, else the first variation that has one).
 //
 // Server-safe and batched: three set-wide queries (parents' models, their variation
-// children, the children's models) rather than a walk per card, then the fabric /
-// settings reads only for the few products that actually carry a model. Mirrors
-// lib/gallery-provider.ts (the detail-page `shop.gallery-media` provider), reshaped
-// for a grid.
+// children, the children's models), then a fabric-config + settings read only for
+// the few products that actually carry a model - never a per-variation resolve.
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProducts, getVariationChildrenForProducts } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
-import { resolveFabricForChild } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
 import { getP3dConfigCached } from '@/modules/product-3d-views-for-shop/lib/config'
 import { CardModel3dOverlay } from '@/modules/product-3d-views-for-shop/components/public/CardModel3dOverlay'
 import type { ShopCardMediaProvider, ShopCardMediaPayload } from '@/modules/shop/lib/card-media'
-import type { P3dItem, P3dModel, P3dCardPayload } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dModel, P3dCardModel, P3dCardPayload } from '@/modules/product-3d-views-for-shop/lib/types'
 
 function groupByProduct(models: P3dModel[]): Map<string, P3dModel[]> {
   const map = new Map<string, P3dModel[]>()
@@ -36,62 +37,65 @@ function groupByProduct(models: P3dModel[]): Map<string, P3dModel[]> {
   return map
 }
 
+// A plain (unpainted) card model from a stored row - the product's own, or a
+// variation's own file on a non-fabric product.
+function plainModel(model: P3dModel, productId: string): P3dCardModel {
+  return {
+    item: { key: model.id, productId, url: signAssetUrl(model.url), format: model.format, label: '3D model' },
+    fabric: null,
+  }
+}
+
 export const product3dCardMedia: ShopCardMediaProvider = {
   async load(productIds): Promise<Map<string, ShopCardMediaPayload>> {
     const out = new Map<string, ShopCardMediaPayload>()
     if (productIds.length === 0) return out
 
-    // The parents' own models. Products that already have one are done after this,
-    // and never need a variation lookup.
+    // Parents' own models, every product's variation children, and those children's
+    // models - three set-wide queries for the whole grid.
     const ownByParent = groupByProduct(await getModelsForProducts(productIds))
-    const needVariation = productIds.filter((id) => !ownByParent.has(id))
-
-    // For the rest, their enabled variation children, and which of those carry a
-    // model. Two queries for the whole batch.
-    const childrenByParent = await getVariationChildrenForProducts(needVariation)
+    const childrenByParent = await getVariationChildrenForProducts(productIds)
     const allChildIds = [...childrenByParent.values()].flat()
     const modelByChild = groupByProduct(allChildIds.length ? await getModelsForProducts(allChildIds) : [])
 
-    // Nothing here has a model, so nothing to draw and none of the settings/fabric
-    // reads below need to run.
+    // Nothing in the batch has a model, so no product gets an overlay and none of the
+    // per-product reads below run.
     if (ownByParent.size === 0 && modelByChild.size === 0) return out
 
     const siteSettings = await getP3dConfigCached()
 
     for (const productId of productIds) {
-      let item: P3dItem | null = null
-      let fabric: P3dCardPayload['fabric'] = null
-
+      const children = childrenByParent.get(productId) ?? []
       const own = ownByParent.get(productId)?.[0]
-      if (own) {
-        item = { key: own.id, productId, url: signAssetUrl(own.url), format: own.format, label: '3D model' }
-      } else {
-        // First enabled variation (in matrix order) that actually has a model.
-        const childId = (childrenByParent.get(productId) ?? []).find((id) => (modelByChild.get(id)?.length ?? 0) > 0)
-        const childModel = childId ? modelByChild.get(childId)?.[0] : undefined
-        if (childId && childModel) {
-          const fabricConfig = await getFabricConfig(productId)
-          if (fabricConfig && fabricConfig.slots.length > 0) {
-            // Painted: resolveFabricForChild returns the (already-signed) model url
-            // and the named material slots for this variation's chosen colours.
-            const bundle = await resolveFabricForChild(childId, productId, fabricConfig)
-            if (bundle) {
-              item = { key: bundle.modelId, productId: childId, url: bundle.modelUrl, format: bundle.format, label: '3D model' }
-              fabric = { slots: bundle.slots, realCm: bundle.realCm, scaleAxis: bundle.scaleAxis }
-            }
-          }
-          // No fabric config (or it did not resolve): the variation's plain model.
-          if (!item) {
-            item = { key: childModel.id, productId: childId, url: signAssetUrl(childModel.url), format: childModel.format, label: '3D model' }
-          }
+      // The child models this product's variations carry, in variation order.
+      const childrenWithModels = children
+        .map((childId) => ({ childId, model: modelByChild.get(childId)?.[0] }))
+        .filter((c): c is { childId: string; model: P3dModel } => Boolean(c.model))
+
+      // Does the product carry any model at all? If not, no overlay.
+      if (!own && childrenWithModels.length === 0) continue
+
+      const fabricConfig = await getFabricConfig(productId)
+      const hasFabric = Boolean(fabricConfig && fabricConfig.slots.length > 0)
+
+      // The default view: the product's own model, else the first variation with one.
+      // A fabric product's own model shows unpainted here (no variation in view yet).
+      const fallback: P3dCardModel = own
+        ? plainModel(own, productId)
+        : plainModel(childrenWithModels[0]!.model, childrenWithModels[0]!.childId)
+
+      // Per-variation own models, only for NON-fabric products - a fabric product's
+      // variation model+material is fetched live by the overlay from /fabric/[child],
+      // so listing them here would resolve nothing useful.
+      const byVariation: Record<string, P3dCardModel> = {}
+      if (!hasFabric) {
+        for (const { childId, model } of childrenWithModels) {
+          byVariation[childId] = plainModel(model, childId)
         }
       }
 
-      if (!item) continue
-      // The product's own viewer overrides (today: brightness) over the sitewide
-      // settings, resolved only for the products that will actually show a viewer.
       const settings = applyProductOverrides(siteSettings, await getP3dProductConfig(productId))
-      const overlay: P3dCardPayload = { item, settings, fabric }
+      const overlay: P3dCardPayload = { settings, parentProductId: productId, hasFabric, byVariation, fallback }
       out.set(productId, { overlay })
     }
 

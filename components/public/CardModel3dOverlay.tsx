@@ -5,14 +5,20 @@
 // of the card picture; tapped, it swaps in the full Viewer3d in place, filling the
 // card's image box, with a close button that hands the picture back.
 //
-// Loaded lazily by construction: three.js lives inside Viewer3d's own dynamic
-// imports, so a card only ever pulls the viewer when a shopper actually taps its
-// badge - the grid stays as light as it was.
+// The model it shows follows the picture the shopper is looking at (`activeSourceId`,
+// handed down by shop's carousel):
+//   - a variation photo on a fabric product -> that variation's model painted with
+//     its material, fetched live from `/fabric/[child]` (shared cache with the detail
+//     gallery);
+//   - a variation photo on a non-fabric product -> that variation's own model, from
+//     the payload's `byVariation`;
+//   - the product's own photo, or a variation with nothing of its own -> `fallback`.
 //
-// Single live viewer. A grid could hold many of these, and each open one is a WebGL
-// context (browsers cap around sixteen). Opening one broadcasts on a window event
-// that every other open viewer listens for and closes itself, so at most one card
-// viewer is ever mounted at a time.
+// Loaded lazily: three.js lives inside Viewer3d's own dynamic imports, so a card
+// only pulls the viewer when a shopper actually taps its badge. Single live viewer -
+// a grid could hold many, and each open one is a WebGL context (browsers cap around
+// sixteen), so opening one broadcasts a window event every other open viewer listens
+// for and closes itself.
 //
 // This is the point's `Overlay`, handed to shop as a prop across the RSC boundary,
 // which is why it carries its own 'use client' - see modules/shop/lib/card-media.ts.
@@ -20,8 +26,9 @@
 import { useEffect, useId, useState } from 'react'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import { viewerChromeCss } from '@/modules/product-3d-views-for-shop/lib/viewer-css'
+import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
 import type { CardOverlayProps } from '@/modules/shop/lib/card-media'
-import type { P3dCardPayload } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dCardPayload, P3dCardModel } from '@/modules/product-3d-views-for-shop/lib/types'
 
 const OPEN_EVENT = 'p3d-card-open'
 
@@ -34,6 +41,7 @@ const cardCss = `
 .p3d-card-btn:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
 .p3d-card-btn svg{flex:none}
 .p3d-card-stage{position:absolute;inset:0;z-index:3;background:var(--color-surface)}
+.p3d-card-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
 .p3d-card-close{position:absolute;top:8px;right:8px;z-index:4;display:flex;align-items:center;justify-content:center;
   width:30px;height:30px;padding:0;border-radius:50%;border:1px solid var(--color-border);background:var(--color-surface);
   color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:background .15s ease}
@@ -58,9 +66,14 @@ function CloseIcon() {
   )
 }
 
-export function CardModel3dOverlay({ payload }: CardOverlayProps) {
+export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps) {
   const data = payload as P3dCardPayload | null
   const [open, setOpen] = useState(false)
+  // The fabric bundle once it lands, TAGGED with the variation it resolved for - so a
+  // stale result (the shopper flicked on) is ignored on render rather than juggled as
+  // a second reset, which keeps every setState below inside an async callback (the
+  // react-hooks/set-state-in-effect rule forbids a synchronous one).
+  const [fabricState, setFabricState] = useState<{ sourceId: string; model: P3dCardModel | null } | null>(null)
   const instanceId = useId()
 
   // Only an OPEN viewer needs to hear that another has opened; a closed one has
@@ -74,12 +87,50 @@ export function CardModel3dOverlay({ payload }: CardOverlayProps) {
     return () => window.removeEventListener(OPEN_EVENT, onOther)
   }, [open, instanceId])
 
-  if (!data?.item) return null
+  // What we can show without a round-trip: a non-fabric variation's own model, else
+  // the fallback. For a fabric variation this stands in until the bundle lands.
+  const syncPick: P3dCardModel | null = data
+    ? (activeSourceId ? data.byVariation[activeSourceId] : undefined) ?? data.fallback
+    : null
+  // A fabric product with a variation in view needs its painted bundle fetched.
+  const needsFabricFetch = open && !!data?.hasFabric && !!activeSourceId
+
+  useEffect(() => {
+    if (!needsFabricFetch || !data || !activeSourceId) return
+    let cancelled = false
+    fetchBundle(data.parentProductId, activeSourceId)
+      .then((bundle) => {
+        if (cancelled) return
+        // The variation's own model (or the parent's, per the resolver), painted with
+        // this variation's material. No model back -> null, so render falls to syncPick.
+        setFabricState({
+          sourceId: activeSourceId,
+          model: bundle?.modelUrl
+            ? {
+                item: { key: bundle.modelId, productId: activeSourceId, url: bundle.modelUrl, format: bundle.format, label: '3D model' },
+                fabric: { slots: bundle.slots, realCm: bundle.realCm, scaleAxis: bundle.scaleAxis },
+              }
+            : null,
+        })
+      })
+      .catch(() => { if (!cancelled) setFabricState({ sourceId: activeSourceId, model: null }) })
+    return () => { cancelled = true }
+  }, [needsFabricFetch, activeSourceId, data])
+
+  if (!data?.fallback) return null
+
+  // While a fabric bundle for the current variation is still in flight, show a
+  // spinner rather than flashing the fallback model and swapping it a moment later.
+  const resolvedForCurrent = needsFabricFetch && fabricState?.sourceId === activeSourceId
+  const shown: P3dCardModel | null = !needsFabricFetch
+    ? syncPick
+    : resolvedForCurrent
+      ? fabricState!.model ?? syncPick
+      : null
 
   const openViewer = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    // Tell any other open card viewer to stand down before we take a context.
     window.dispatchEvent(new CustomEvent<string>(OPEN_EVENT, { detail: instanceId }))
     setOpen(true)
   }
@@ -94,7 +145,11 @@ export function CardModel3dOverlay({ payload }: CardOverlayProps) {
       <style dangerouslySetInnerHTML={{ __html: viewerChromeCss + cardCss }} />
       {open ? (
         <div className="p3d-card-stage">
-          <Viewer3d item={data.item} settings={data.settings} fabric={data.fabric ?? undefined} />
+          {shown ? (
+            <Viewer3d item={shown.item} settings={data.settings} fabric={shown.fabric ?? undefined} />
+          ) : (
+            <div className="p3d-card-loading"><span className="p3d-material-spinner" aria-hidden="true" /></div>
+          )}
           <button type="button" className="p3d-card-close" aria-label="Close 3D view" onClick={closeViewer}>
             <CloseIcon />
           </button>

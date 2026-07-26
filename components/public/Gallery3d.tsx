@@ -17,6 +17,7 @@ import { preloadProductAssets } from '@/modules/product-3d-views-for-shop/lib/pr
 import { mountThumb } from '@/modules/product-3d-views-for-shop/lib/three/thumb-stage'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import { viewerChromeCss as css } from '@/modules/product-3d-views-for-shop/lib/viewer-css'
+import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
 import type { P3dItem, P3dPayload, FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { ShopGalleryExtraStageProps, ShopGalleryExtraThumbsProps } from '@/modules/shop/lib/gallery-media'
@@ -241,26 +242,6 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
 // set, and the data is per-variation catalogue data that does not change under the
 // shopper. Holds the PROMISE, so two picks of the same child in quick succession share
 // one request rather than racing - the same bargain the model and texture caches make.
-const bundleCache = new Map<string, Promise<FabricBundle | null>>()
-
-function fetchBundle(parentProductId: string, childProductId: string): Promise<FabricBundle | null> {
-  const key = `${parentProductId}|${childProductId}`
-  let entry = bundleCache.get(key)
-  if (!entry) {
-    const url = `/api/m/product-3d-views-for-shop/fabric/x?parent=${encodeURIComponent(parentProductId)}&child=${encodeURIComponent(childProductId)}`
-    entry = fetch(url)
-      .then((r) => (r.ok ? (r.json() as Promise<FabricBundle | null>) : null))
-      // A failed resolve must not be cached, or a shopper whose connection blipped is
-      // handed the same failure for that colour for the rest of their visit.
-      .catch((error) => {
-        bundleCache.delete(key)
-        throw error
-      })
-    bundleCache.set(key, entry)
-  }
-  return entry
-}
-
 // Thumbnail counterpart to PaintedStage: fetches the same cached bundle (the
 // shared fetchBundle cache below means this is a memory hit whenever the stage
 // has already resolved this variation, which is the common case - the shopper
