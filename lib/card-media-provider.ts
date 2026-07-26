@@ -12,8 +12,11 @@
 //     variation up front;
 //   - a variation photo on a NON-fabric product -> that variation's own model file,
 //     from `byVariation` (resolved here, cheap - it is just the model row);
-//   - the product's own photo, or a variation with nothing of its own -> `fallback`
-//     (the product's own model, else the first variation that has one).
+//   - the product's own photo on a FABRIC product -> the fallback model painted with the
+//     DEFAULT variation's material (`defaultChildId`, the first enabled variation),
+//     fetched live too, so the opening 3D view is never a bare, unpainted file;
+//   - the product's own photo on a non-fabric product, or a variation with nothing of
+//     its own -> `fallback` (the product's own model, else the first variation with one).
 //
 // Server-safe and batched: three set-wide queries (parents' models, their variation
 // children, the children's models), then a fabric-config + settings read only for
@@ -94,8 +97,14 @@ export const product3dCardMedia: ShopCardMediaProvider = {
         }
       }
 
+      // For a fabric product, the colour the opening view (no variation in view yet)
+      // paints with: the first enabled variation, in matrix order. The overlay fetches
+      // its bundle live, so the card's 3D shows a real material instead of the bare file.
+      // Non-fabric products need none - their fallback is a plain model file.
+      const defaultChildId = hasFabric ? children[0] : undefined
+
       const settings = applyProductOverrides(siteSettings, await getP3dProductConfig(productId))
-      const overlay: P3dCardPayload = { settings, parentProductId: productId, hasFabric, byVariation, fallback }
+      const overlay: P3dCardPayload = { settings, parentProductId: productId, hasFabric, byVariation, fallback, defaultChildId }
       out.set(productId, { overlay })
     }
 

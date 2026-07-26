@@ -87,6 +87,13 @@ export type P3dCardPayload = {
   // variation has no model of its own to show: the product's own model, else the first
   // variation that has one. Always present - a payload with no model is never emitted.
   fallback: P3dCardModel
+  // For a FABRIC product, the variation whose material paints the opening view when no
+  // colour is in view yet (the shopper opened 3D on the product's own photo): the first
+  // enabled variation. The overlay fetches its painted bundle live so the card's 3D
+  // shows a real material rather than the bare, unpainted file. Undefined for a
+  // non-fabric product (its fallback is just a model file, nothing to paint) and for a
+  // fabric product with no variation to default to.
+  defaultChildId?: string
 }
 
 // A fabric configurator resolution for one variant child: which model to draw and

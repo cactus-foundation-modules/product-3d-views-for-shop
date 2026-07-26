@@ -12,7 +12,11 @@
 //     gallery);
 //   - a variation photo on a non-fabric product -> that variation's own model, from
 //     the payload's `byVariation`;
-//   - the product's own photo, or a variation with nothing of its own -> `fallback`.
+//   - the product's own photo on a fabric product -> the model painted with the DEFAULT
+//     variation's material (`defaultChildId`), fetched live the same way, so the opening
+//     view is never a bare, unpainted file;
+//   - the product's own photo on a non-fabric product, or a variation with nothing of
+//     its own -> `fallback`.
 //
 // Loaded lazily: three.js lives inside Viewer3d's own dynamic imports, so a card
 // only pulls the viewer when a shopper actually taps its badge. Single live viewer -
@@ -87,41 +91,49 @@ export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps
     return () => window.removeEventListener(OPEN_EVENT, onOther)
   }, [open, instanceId])
 
+  // Which variation the painted bundle should resolve for: the one whose photo is in
+  // view, else - on a fabric product opened with no colour in view (the product's own
+  // photo) - the default variation, so the opening view is painted rather than the bare
+  // file. Undefined on a non-fabric product, and on a fabric product with no variation
+  // to default to, where the plain fallback stands.
+  const fabricChild = data?.hasFabric ? activeSourceId ?? data.defaultChildId : undefined
+
   // What we can show without a round-trip: a non-fabric variation's own model, else
-  // the fallback. For a fabric variation this stands in until the bundle lands.
+  // the fallback. For a fabric view this stands in until the bundle lands.
   const syncPick: P3dCardModel | null = data
     ? (activeSourceId ? data.byVariation[activeSourceId] : undefined) ?? data.fallback
     : null
-  // A fabric product with a variation in view needs its painted bundle fetched.
-  const needsFabricFetch = open && !!data?.hasFabric && !!activeSourceId
+  // A fabric view (a variation in view, or the default colour for the opening view)
+  // needs its painted bundle fetched.
+  const needsFabricFetch = open && !!fabricChild
 
   useEffect(() => {
-    if (!needsFabricFetch || !data || !activeSourceId) return
+    if (!needsFabricFetch || !data || !fabricChild) return
     let cancelled = false
-    fetchBundle(data.parentProductId, activeSourceId)
+    fetchBundle(data.parentProductId, fabricChild)
       .then((bundle) => {
         if (cancelled) return
         // The variation's own model (or the parent's, per the resolver), painted with
         // this variation's material. No model back -> null, so render falls to syncPick.
         setFabricState({
-          sourceId: activeSourceId,
+          sourceId: fabricChild,
           model: bundle?.modelUrl
             ? {
-                item: { key: bundle.modelId, productId: activeSourceId, url: bundle.modelUrl, format: bundle.format, label: '3D model' },
+                item: { key: bundle.modelId, productId: fabricChild, url: bundle.modelUrl, format: bundle.format, label: '3D model' },
                 fabric: { slots: bundle.slots, realCm: bundle.realCm, scaleAxis: bundle.scaleAxis },
               }
             : null,
         })
       })
-      .catch(() => { if (!cancelled) setFabricState({ sourceId: activeSourceId, model: null }) })
+      .catch(() => { if (!cancelled) setFabricState({ sourceId: fabricChild, model: null }) })
     return () => { cancelled = true }
-  }, [needsFabricFetch, activeSourceId, data])
+  }, [needsFabricFetch, fabricChild, data])
 
   if (!data?.fallback) return null
 
-  // While a fabric bundle for the current variation is still in flight, show a
-  // spinner rather than flashing the fallback model and swapping it a moment later.
-  const resolvedForCurrent = needsFabricFetch && fabricState?.sourceId === activeSourceId
+  // While a fabric bundle for the current view is still in flight, show a spinner
+  // rather than flashing the fallback model and swapping it a moment later.
+  const resolvedForCurrent = needsFabricFetch && fabricState?.sourceId === fabricChild
   const shown: P3dCardModel | null = !needsFabricFetch
     ? syncPick
     : resolvedForCurrent
