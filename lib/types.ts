@@ -61,6 +61,20 @@ export type P3dPayload = {
   fabric: FabricConfig | null
 }
 
+// What the card-media provider hands its overlay, via shop's `shop.card-media`
+// point, to show a model on a product CARD in a grid. One model - the product's own
+// where it has one, else a variation's painted with that variation's fabric - plus
+// the viewer settings. JSON-serialisable: it crosses the RSC boundary as a plain
+// prop, exactly like P3dPayload.
+export type P3dCardPayload = {
+  item: P3dItem
+  settings: P3dConfig
+  // The variation's resolved fabric paints, or null for a plain (unpainted) model -
+  // a product's own model on a card, where no combination has been chosen. The shape
+  // matches Viewer3d's `fabric` prop, so it passes straight through.
+  fabric: { slots: FabricBundle['slots']; realCm: number | null; scaleAxis: 'height' | 'width' } | null
+}
+
 // A fabric configurator resolution for one variant child: which model to draw and
 // which named material slots to paint, at what tile density. Composed server-side
 // from the child's selected options + sizes and the saved config (see

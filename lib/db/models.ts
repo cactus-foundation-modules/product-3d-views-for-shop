@@ -253,6 +253,30 @@ export async function deleteModel(id: string): Promise<void> {
   await prisma.$executeRaw`DELETE FROM "p3d_models" WHERE "id" = ${id}`
 }
 
+/**
+ * Enabled variation children per parent, in variation order, for a whole batch -
+ * one query for the lot. Empty without shop-variations, or for a parent with no
+ * (enabled) variations. Used by the card-media provider to find, for a product with
+ * no model of its own, a variation that has one to show in the grid. Read-only and
+ * guarded by to_regclass, like the rest of the svr_ access above.
+ */
+export async function getVariationChildrenForProducts(productIds: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>()
+  if (productIds.length === 0 || !(await hasVariationsTables())) return map
+  const rows = await prisma.$queryRaw<{ productId: string; childProductId: string }[]>`
+    SELECT "product_id" AS "productId", "child_product_id" AS "childProductId"
+    FROM "svr_variants"
+    WHERE "product_id" = ANY(${productIds}::text[]) AND "enabled" = true
+    ORDER BY "position" ASC, "created_at" ASC
+  `
+  for (const r of rows) {
+    const list = map.get(r.productId) ?? []
+    list.push(r.childProductId)
+    map.set(r.productId, list)
+  }
+  return map
+}
+
 /** Models attached directly to any of the given products (no variation tree walk). */
 export async function getModelsForProducts(productIds: string[]): Promise<P3dModel[]> {
   if (productIds.length === 0) return []
