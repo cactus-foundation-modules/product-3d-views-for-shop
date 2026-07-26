@@ -5,18 +5,28 @@
 // of the card picture; tapped, it swaps in the full Viewer3d in place, filling the
 // card's image box, with a close button that hands the picture back.
 //
-// The model it shows follows the picture the shopper is looking at (`activeSourceId`,
-// handed down by shop's carousel):
-//   - a variation photo on a fabric product -> that variation's model painted with
-//     its material, fetched live from `/fabric/[child]` (shared cache with the detail
-//     gallery);
-//   - a variation photo on a non-fabric product -> that variation's own model, from
-//     the payload's `byVariation`;
-//   - the product's own photo on a fabric product -> the model painted with the DEFAULT
-//     variation's material (`defaultChildId`), fetched live the same way, so the opening
-//     view is never a bare, unpainted file;
-//   - the product's own photo on a non-fabric product, or a variation with nothing of
-//     its own -> `fallback`.
+// Open, the stage carries its OWN prev/next arrows - the card's own carousel arrows
+// sit behind the stage while it is up, so these stand in for them, stepping the model
+// through each variation rather than the still pictures. They walk a list of "slides"
+// built from the payload:
+//   - a FABRIC product -> one slide per enabled variation (`variationChildIds`, matrix
+//     order), each fetched live from `/fabric/[child]` (model + its material), the same
+//     endpoint the detail gallery uses. The previous variation's model stays on screen
+//     while the next one loads, so a step never blanks to a spinner mid-browse;
+//   - a NON-fabric product -> the product's own model (when it has one) first, then one
+//     slide per variation that carries its own model (`byVariation`, same order). These
+//     are already resolved, so stepping is instant.
+//
+// Which slide it opens on follows the picture the shopper was looking at when they
+// tapped (`activeSourceId`, handed down by shop's carousel): that variation's slide if
+// it has one, else the opening view (a fabric product's default variation, or the
+// product's own model). Closing hands the card's own picture and arrows back untouched,
+// so the browse is a self-contained detour - modal, not a hijack of the carousel.
+//
+// The painted-fabric bundles are tagged with the variation they resolved for, so a
+// stale result (the shopper stepped on) is ignored on render rather than juggled as a
+// second reset - which keeps every setState below inside an async callback (the
+// react-hooks/set-state-in-effect rule forbids a synchronous one).
 //
 // Loaded lazily: three.js lives inside Viewer3d's own dynamic imports, so a card
 // only pulls the viewer when a shopper actually taps its badge. Single live viewer -
@@ -27,10 +37,11 @@
 // This is the point's `Overlay`, handed to shop as a prop across the RSC boundary,
 // which is why it carries its own 'use client' - see modules/shop/lib/card-media.ts.
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import { viewerChromeCss } from '@/modules/product-3d-views-for-shop/lib/viewer-css'
 import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
+import { buildSlides, initialIndex } from '@/modules/product-3d-views-for-shop/lib/card-slides'
 import type { CardOverlayProps } from '@/modules/shop/lib/card-media'
 import type { P3dCardPayload, P3dCardModel } from '@/modules/product-3d-views-for-shop/lib/types'
 
@@ -51,6 +62,18 @@ const cardCss = `
   color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:background .15s ease}
 .p3d-card-close:hover,.p3d-card-close:focus-visible{background:var(--color-bg-subtle)}
 .p3d-card-close:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+/* The stage's own carousel arrows: same shape and placement as shop's card arrows, so
+   stepping the model reads as the same control the shopper flicked pictures with. Above
+   the canvas, clear of the close button (top-right) and the AR/reset chrome (bottom). */
+.p3d-card-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:4;display:flex;align-items:center;
+  justify-content:center;width:34px;height:34px;padding:0;border-radius:50%;border:1px solid var(--color-border);
+  background:var(--color-surface);color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);
+  transition:background .15s ease}
+.p3d-card-nav:hover,.p3d-card-nav:focus-visible{background:var(--color-bg-subtle)}
+.p3d-card-nav:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.p3d-card-nav svg{flex:none}
+.p3d-card-nav-prev{left:8px}
+.p3d-card-nav-next{right:8px}
 `
 
 function CubeIcon() {
@@ -70,13 +93,25 @@ function CloseIcon() {
   )
 }
 
+function Chevron({ dir }: { dir: 'left' | 'right' }) {
+  // Points left or right; drawn once, flipped for the other side - matches shop's
+  // card arrows so the two controls read as one.
+  const d = dir === 'left' ? 'M15 4l-7 8 7 8' : 'M9 4l7 8-7 8'
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d={d} stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps) {
   const data = payload as P3dCardPayload | null
   const [open, setOpen] = useState(false)
+  // Where the open viewer's own arrows are in the slide list. Set from the tapped
+  // picture when the viewer opens (see openViewer), then moved only by the arrows.
+  const [viewIndex, setViewIndex] = useState(0)
   // The fabric bundle once it lands, TAGGED with the variation it resolved for - so a
-  // stale result (the shopper flicked on) is ignored on render rather than juggled as
-  // a second reset, which keeps every setState below inside an async callback (the
-  // react-hooks/set-state-in-effect rule forbids a synchronous one).
+  // stale result (the shopper stepped on) is ignored on render.
   const [fabricState, setFabricState] = useState<{ sourceId: string; model: P3dCardModel | null } | null>(null)
   const instanceId = useId()
 
@@ -91,21 +126,17 @@ export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps
     return () => window.removeEventListener(OPEN_EVENT, onOther)
   }, [open, instanceId])
 
-  // Which variation the painted bundle should resolve for: the one whose photo is in
-  // view, else - on a fabric product opened with no colour in view (the product's own
-  // photo) - the default variation, so the opening view is painted rather than the bare
-  // file. Undefined on a non-fabric product, and on a fabric product with no variation
-  // to default to, where the plain fallback stands.
-  const fabricChild = data?.hasFabric ? activeSourceId ?? data.defaultChildId : undefined
+  const slides = useMemo(() => (data ? buildSlides(data) : []), [data])
+  const count = slides.length
+  // Guard the index against a slide list that changed under us (defensive; it is
+  // fixed per payload today).
+  const at = count ? Math.min(Math.max(viewIndex, 0), count - 1) : 0
+  const current = slides[at]
 
-  // What we can show without a round-trip: a non-fabric variation's own model, else
-  // the fallback. For a fabric view this stands in until the bundle lands.
-  const syncPick: P3dCardModel | null = data
-    ? (activeSourceId ? data.byVariation[activeSourceId] : undefined) ?? data.fallback
-    : null
-  // A fabric view (a variation in view, or the default colour for the opening view)
-  // needs its painted bundle fetched.
-  const needsFabricFetch = open && !!fabricChild
+  // A fabric slide needs its painted bundle fetched; a non-fabric slide already
+  // carries its model. Only fetch while the viewer is open.
+  const fabricChild = open && data?.hasFabric ? current?.childId : undefined
+  const needsFabricFetch = !!fabricChild
 
   useEffect(() => {
     if (!needsFabricFetch || !data || !fabricChild) return
@@ -114,7 +145,7 @@ export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps
       .then((bundle) => {
         if (cancelled) return
         // The variation's own model (or the parent's, per the resolver), painted with
-        // this variation's material. No model back -> null, so render falls to syncPick.
+        // this variation's material. No model back -> null, so render falls to fallback.
         setFabricState({
           sourceId: fabricChild,
           model: bundle?.modelUrl
@@ -131,18 +162,32 @@ export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps
 
   if (!data?.fallback) return null
 
-  // While a fabric bundle for the current view is still in flight, show a spinner
-  // rather than flashing the fallback model and swapping it a moment later.
-  const resolvedForCurrent = needsFabricFetch && fabricState?.sourceId === fabricChild
-  const shown: P3dCardModel | null = !needsFabricFetch
-    ? syncPick
-    : resolvedForCurrent
-      ? fabricState!.model ?? syncPick
-      : null
+  // The model to draw for the current slide. A non-fabric slide is instant. A fabric
+  // slide shows its painted bundle once it lands; until then the previously shown
+  // model stays up (a mid-browse step never blanks), falling to a spinner only on the
+  // very first open when nothing has resolved yet.
+  const shown: P3dCardModel | null = !data.hasFabric
+    ? current?.model ?? data.fallback
+    : !fabricChild
+      ? data.fallback
+      : fabricState?.sourceId === fabricChild
+        ? fabricState.model ?? data.fallback
+        : fabricState?.model ?? null
+
+  const canPrev = at > 0
+  const canNext = at < count - 1
+
+  const step = (delta: number) => (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setViewIndex((i) => Math.min(Math.max(i + delta, 0), count - 1))
+  }
 
   const openViewer = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
+    if (!data) return
+    setViewIndex(initialIndex(slides, activeSourceId, data))
     window.dispatchEvent(new CustomEvent<string>(OPEN_EVENT, { detail: instanceId }))
     setOpen(true)
   }
@@ -161,6 +206,18 @@ export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps
             <Viewer3d item={shown.item} settings={data.settings} fabric={shown.fabric ?? undefined} />
           ) : (
             <div className="p3d-card-loading"><span className="p3d-material-spinner" aria-hidden="true" /></div>
+          )}
+          {/* Left arrow only once the shopper has stepped off the first model; right
+              arrow drops away on the last, so neither control is ever a dead end. */}
+          {count > 1 && canPrev && (
+            <button type="button" className="p3d-card-nav p3d-card-nav-prev" aria-label="Previous 3D model" onClick={step(-1)}>
+              <Chevron dir="left" />
+            </button>
+          )}
+          {count > 1 && canNext && (
+            <button type="button" className="p3d-card-nav p3d-card-nav-next" aria-label="Next 3D model" onClick={step(1)}>
+              <Chevron dir="right" />
+            </button>
           )}
           <button type="button" className="p3d-card-close" aria-label="Close 3D view" onClick={closeViewer}>
             <CloseIcon />

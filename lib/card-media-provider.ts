@@ -102,9 +102,13 @@ export const product3dCardMedia: ShopCardMediaProvider = {
       // its bundle live, so the card's 3D shows a real material instead of the bare file.
       // Non-fabric products need none - their fallback is a plain model file.
       const defaultChildId = hasFabric ? children[0] : undefined
+      // For a fabric product, the full set of enabled variations (matrix order) the open
+      // viewer's arrows step through, each fetched live. Non-fabric navigation walks
+      // `byVariation` instead, so this stays undefined there.
+      const variationChildIds = hasFabric ? children : undefined
 
       const settings = applyProductOverrides(siteSettings, await getP3dProductConfig(productId))
-      const overlay: P3dCardPayload = { settings, parentProductId: productId, hasFabric, byVariation, fallback, defaultChildId }
+      const overlay: P3dCardPayload = { settings, parentProductId: productId, hasFabric, byVariation, fallback, defaultChildId, variationChildIds }
       out.set(productId, { overlay })
     }
 

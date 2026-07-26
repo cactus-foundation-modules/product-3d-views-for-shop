@@ -94,6 +94,11 @@ export type P3dCardPayload = {
   // non-fabric product (its fallback is just a model file, nothing to paint) and for a
   // fabric product with no variation to default to.
   defaultChildId?: string
+  // For a FABRIC product, every enabled variation's child id in matrix order - the set
+  // the open viewer's own prev/next arrows step through, fetching each one's painted
+  // bundle live. Undefined for a non-fabric product, whose navigable models are already
+  // listed in `byVariation` (in the same order).
+  variationChildIds?: string[]
 }
 
 // A fabric configurator resolution for one variant child: which model to draw and
