@@ -609,6 +609,79 @@ export async function prefetchTexture(url: string): Promise<void> {
   }
 }
 
+// The two baseColor fields a paint touches, on the one material shape both this
+// module's paint and reset paths need. Structural rather than three's Material,
+// because the traverse hands back `unknown` material slots and this is the whole
+// of what either path reads or writes.
+type PaintableMaterial = {
+  name?: string
+  map?: Texture | null
+  color?: {
+    r: number
+    g: number
+    b: number
+    copy: (c: unknown) => void
+    setRGB: (r: number, g: number, b: number) => void
+  }
+  needsUpdate?: boolean
+}
+
+// The look each material had before the configurator first painted it: the map the
+// file shipped with, and the tint that came with it. Recorded at the moment of the
+// first paint, so a slot the configurator later has nothing to say about can be
+// handed back exactly as the model's author left it (see resetFabricPaint).
+//
+// Kept in a WeakMap keyed on the material OBJECT rather than on material.userData,
+// because a Texture reference cannot survive userData: three deep-copies userData
+// through JSON on Material.copy, which would flatten the texture into a plain
+// object. The WeakMap also lets go of an entry with the material it describes, so a
+// disposed model leaves nothing behind here.
+const originalPaint = new WeakMap<object, { map: Texture | null; colour: [number, number, number] | null }>()
+
+// First write wins: what is recorded must be the FILE's own look, never a previous
+// paint's, or reverting would hand back the last colour instead of the original.
+function recordOriginalPaint(mat: PaintableMaterial): void {
+  if (originalPaint.has(mat)) return
+  originalPaint.set(mat, {
+    map: mat.map ?? null,
+    colour: mat.color ? [mat.color.r, mat.color.g, mat.color.b] : null,
+  })
+}
+
+/**
+ * Hand a named material slot back the look it had before the configurator painted it.
+ *
+ * The counterpart to applyFabricPaint, for the case where a variation resolves to no
+ * paint for a part the PREVIOUS variation did paint. The resolver drops a slot it
+ * cannot settle - an option value with no swatch picture behind it, a part whose
+ * colour is simply not chosen on this combination - and the repaint path only walks
+ * the slots it is given, so without this the material silently kept the outgoing
+ * variation's texture. That is worse than showing nothing: the shopper is looking at
+ * a chair back in a colour they did not pick and, in the case that found this, one
+ * that is not even sold in that combination. Reverting shows the file's own finish -
+ * neutral, and the same thing an unconfigured part has always shown.
+ *
+ * A no-op for a material this viewer never painted, and for a name the model does not
+ * carry, so it is safe to call speculatively.
+ */
+export function resetFabricPaint(model: Object3D, materialName: string): void {
+  model.traverse((child) => {
+    const mesh = child as Object3D & { material?: unknown }
+    const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
+    for (const material of materials) {
+      const mat = material as PaintableMaterial
+      if (mat.name !== materialName) continue
+      const original = originalPaint.get(mat)
+      // Never painted, so there is nothing to undo and no record of what to undo it
+      // to. Leaving it alone is right: the material is already as the file has it.
+      if (!original) continue
+      mat.map = original.map
+      if (original.colour && mat.color) mat.color.setRGB(...original.colour)
+      mat.needsUpdate = true
+    }
+  })
+}
+
 /**
  * Paint one named material slot: either with an external texture at a given tile
  * repeat and rotation, or - when the slot carries a flat `colour` - with that colour
@@ -645,8 +718,9 @@ export async function applyFabricPaint(
       const mesh = child as Object3D & { material?: unknown }
       const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
       for (const material of materials) {
-        const mat = material as { name?: string; map?: Texture | null; color?: { copy: (c: unknown) => void }; needsUpdate?: boolean }
+        const mat = material as PaintableMaterial
         if (mat.name !== paint.materialName) continue
+        recordOriginalPaint(mat)
         mat.map = null
         mat.color?.copy(colour)
         mat.needsUpdate = true
@@ -717,8 +791,9 @@ export async function applyFabricPaint(
     const mesh = child as Object3D & { material?: unknown }
     const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
     for (const material of materials) {
-      const mat = material as { name?: string; map?: Texture | null; color?: { setRGB: (r: number, g: number, b: number) => void }; needsUpdate?: boolean }
+      const mat = material as PaintableMaterial
       if (mat.name !== paint.materialName) continue
+      recordOriginalPaint(mat)
       // Built lazily off the first matched material, then shared with the rest.
       const tex = texture ?? (texture = build(mat.map))
       mat.map = tex

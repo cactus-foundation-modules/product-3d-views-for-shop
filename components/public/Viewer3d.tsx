@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture, resetFabricPaint, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { detectArSupport, bakeUsdzUrl, startWebXrAr, type ArKind } from '@/modules/product-3d-views-for-shop/lib/three/ar'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
@@ -139,6 +139,12 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // dispose the outgoing one (its own per-viewer GPU allocation) without touching
   // the shared master in the texture cache.
   const appliedRef = useRef<Map<string, Texture>>(new Map())
+  // Every material this viewer has painted, texture slots and flat-colour ones alike.
+  // Wider than appliedRef on purpose: that map holds only the slots with a Texture to
+  // dispose, and a part painted a flat colour has none - but it has still been changed
+  // from the file's own look and still has to be handed back when the configurator
+  // stops having anything to say about it. See the revert pass in the repaint effect.
+  const paintedRef = useRef<Set<string>>(new Set())
 
   // Set by build() once the camera, controls and pivot exist, and nulled on
   // dispose. Same reason as modelRef: those three live only inside build()'s
@@ -308,14 +314,17 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         // effect below; this first paint is also the one a headrest switch rebuilds
         // through, since that changes the model url and re-runs this effect.
         const applied = appliedRef.current
+        const painted = paintedRef.current
         for (const slot of fabric?.slots ?? []) {
           const tex = await applyFabricPaint(model, slot)
+          painted.add(slot.materialName)
           if (tex) applied.set(slot.materialName, tex)
         }
 
         if (cancelled) {
           for (const tex of applied.values()) tex.dispose()
           applied.clear()
+          painted.clear()
           renderer.dispose(); disposeModel(model); return
         }
         // Reachable by the repaint effect only now the model is built and painted.
@@ -903,6 +912,9 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           // The masters they were cloned from stay in the shared texture cache.
           for (const tex of appliedRef.current.values()) tex.dispose()
           appliedRef.current.clear()
+          // Cleared with them: the model these names refer to is about to be disposed,
+          // and the next build clones fresh materials at the file's own look.
+          paintedRef.current.clear()
           modelRef.current = null
           builtUrlRef.current = null
           resetRef.current = null
@@ -924,6 +936,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         disposeShadow?.()
         for (const tex of appliedRef.current.values()) tex.dispose()
         appliedRef.current.clear()
+        paintedRef.current.clear()
         rendererRef.current = null
         invalidateRef.current = null
         disposeModel(model)
@@ -977,6 +990,35 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     if (!model || builtUrlRef.current !== item.url) return
     let cancelled = false
     const applied = appliedRef.current
+    const painted = paintedRef.current
+
+    // Parts this viewer painted that the new variation says nothing about, handed back
+    // to the file's own finish before anything else happens.
+    //
+    // The resolver drops a slot it cannot settle - an option value carrying no swatch
+    // picture, a part not coloured on this combination - and the loop below only walks
+    // the slots it is given, so a dropped one was simply never revisited and kept the
+    // OUTGOING variation's texture. On Deskwell's Eclipse XL Plus that showed as a
+    // chair back still in the previous fabric after the shopper changed seat colour to
+    // one whose only back option had no picture behind it: not a missing colour but a
+    // wrong one, and a combination not even sold. Reverting shows what an unconfigured
+    // part has always shown.
+    //
+    // Synchronous and ahead of the texture fetches, so the stale colour goes at the
+    // moment of the click rather than after a round trip, and deliberately outside the
+    // `cancelled` guard below: handing a material back is right whether or not this run
+    // goes on to paint anything, and a superseded run's own revert costs one frame.
+    const wanted = new Set((fabric?.slots ?? []).map((slot) => slot.materialName))
+    for (const materialName of painted) {
+      if (wanted.has(materialName)) continue
+      resetFabricPaint(model, materialName)
+      // This viewer's clone for that slot, freed with the paint it belonged to.
+      applied.get(materialName)?.dispose()
+      applied.delete(materialName)
+      painted.delete(materialName)
+      invalidateRef.current?.()
+    }
+
     ;(async () => {
       // The skeleton goes up before the first await and comes down in the
       // `finally`, so it covers the texture fetches exactly. A superseded run
@@ -1001,6 +1043,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           if (cancelled) { tex?.dispose(); continue }
           const previous = applied.get(slot.materialName)
           if (previous && previous !== tex) previous.dispose()
+          painted.add(slot.materialName)
           if (tex) applied.set(slot.materialName, tex)
           // Per slot rather than once at the end: a repaint of several materials then
           // shows each as it lands, instead of all of them on whichever frame happens to

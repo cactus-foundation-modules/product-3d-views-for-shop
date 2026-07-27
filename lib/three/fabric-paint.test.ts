@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Color, Mesh, MeshStandardMaterial } from 'three'
-import { applyFabricPaint } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { Color, Mesh, MeshStandardMaterial, Texture } from 'three'
+import { applyFabricPaint, resetFabricPaint } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 
 // The configurator's promise is that one swatch means one finish, whichever file a
 // variation happens to be attached to. It does not hold on its own: the base colour
@@ -99,5 +99,86 @@ describe('applyFabricPaint', () => {
     expect(other.color.getHex()).toBe(0xcccccc)
     expect(other.map).toBeNull()
     expect(new Color(0xcccccc).getHex()).toBe(other.color.getHex())
+  })
+})
+
+// A variation that resolves to no paint for a part the previous one DID paint used to
+// leave the old texture sitting on it: the repaint path walks the slots it is handed,
+// and a slot the resolver dropped is simply never revisited. That showed a shopper a
+// chair back in a fabric they had just changed away from - and, on the product that
+// found it, one not sold in that combination at all. These hold the way back.
+describe('resetFabricPaint', () => {
+  it('gives a painted slot back the map and tint the file shipped with', async () => {
+    const original = new Texture()
+    const material = new MeshStandardMaterial({ name: 'mat_chair_back', color: 0xcccccc })
+    material.map = original
+    const mesh = meshWith(material)
+
+    await applyFabricPaint(mesh, { ...SLOT, materialName: 'mat_chair_back' })
+    expect(material.map).not.toBe(original)
+    expect(material.color.getHex()).toBe(0xffffff)
+
+    resetFabricPaint(mesh, 'mat_chair_back')
+
+    expect(material.map).toBe(original)
+    expect(material.color.getHex()).toBe(0xcccccc)
+  })
+
+  it('reverts a slot painted a flat colour, which carries no texture to swap back', async () => {
+    // The case appliedRef alone cannot catch: a flat-colour paint returns no Texture,
+    // so the viewer has nothing filed against the slot - but the material has still
+    // been changed and still has to be handed back.
+    const material = new MeshStandardMaterial({ name: 'mat_chair_back', color: 0xcccccc })
+    const mesh = meshWith(material)
+
+    await applyFabricPaint(mesh, { materialName: 'mat_chair_back', textureUrl: '', colour: '#000000', repeat: 1 })
+    expect(material.color.getHex()).toBe(0x000000)
+
+    resetFabricPaint(mesh, 'mat_chair_back')
+
+    expect(material.color.getHex()).toBe(0xcccccc)
+  })
+
+  it('reverts to the FILE, not to whatever the last paint was', async () => {
+    // Two colour changes then a revert. Recording the original on every paint rather
+    // than only the first would hand back the second colour and call it neutral.
+    const material = new MeshStandardMaterial({ name: 'mat_chair_back', color: 0xcccccc })
+    const mesh = meshWith(material)
+
+    await applyFabricPaint(mesh, { materialName: 'mat_chair_back', textureUrl: '', colour: '#ff0000', repeat: 1 })
+    await applyFabricPaint(mesh, { materialName: 'mat_chair_back', textureUrl: '', colour: '#00ff00', repeat: 1 })
+
+    resetFabricPaint(mesh, 'mat_chair_back')
+
+    expect(material.color.getHex()).toBe(0xcccccc)
+    expect(material.map).toBeNull()
+  })
+
+  it('leaves a material it never painted exactly as it is', () => {
+    // Called speculatively by the viewer, so a name it has no record of - a part the
+    // configurator has never touched - must come through untouched rather than blanked.
+    const original = new Texture()
+    const material = new MeshStandardMaterial({ name: 'mat_chair_frame', color: 0x333333 })
+    material.map = original
+
+    resetFabricPaint(meshWith(material), 'mat_chair_frame')
+
+    expect(material.map).toBe(original)
+    expect(material.color.getHex()).toBe(0x333333)
+  })
+
+  it('leaves a material of another name alone', async () => {
+    const back = new MeshStandardMaterial({ name: 'mat_chair_back', color: 0xcccccc })
+    const seat = new MeshStandardMaterial({ name: 'mat_chair_seat', color: 0xcccccc })
+    const mesh = new Mesh(undefined, [back, seat])
+
+    await applyFabricPaint(mesh, { ...SLOT, materialName: 'mat_chair_back' })
+    await applyFabricPaint(mesh, { ...SLOT, materialName: 'mat_chair_seat' })
+
+    resetFabricPaint(mesh, 'mat_chair_back')
+
+    expect(back.map).toBeNull()
+    expect(seat.map).not.toBeNull()
+    expect(seat.color.getHex()).toBe(0xffffff)
   })
 })
