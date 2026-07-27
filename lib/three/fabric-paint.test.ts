@@ -102,6 +102,85 @@ describe('applyFabricPaint', () => {
   })
 })
 
+// One model per product, not one per material: a range with a leather option in it
+// used to need a second copy of the same geometry, its seat authored shinier, kept in
+// step with the first by hand forever. The swatch's own name settles it instead - so
+// these hold that a glossed slot really does change the surface's lighting response,
+// and that leaving it out changes nothing at all.
+describe('applyFabricPaint gloss', () => {
+  it('makes a glossed part smoother than the file had it', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_chair_seat', roughness: 0.9 })
+
+    await applyFabricPaint(meshWith(material), { ...SLOT, materialName: 'mat_chair_seat', gloss: 0.55 })
+
+    expect(material.roughness).toBeLessThan(0.9)
+    expect(material.roughness).toBeGreaterThan(0)
+  })
+
+  it('drops the roughness map, which would otherwise hold the part matte', async () => {
+    // three multiplies the scalar by the map's green channel, so a seat authored as
+    // cloth would stay flat however low the number goes - while the piping beside it,
+    // authored without a map, shone. Two finishes off one swatch.
+    const material = new MeshStandardMaterial({ name: 'mat_chair_seat', roughness: 0.9 })
+    material.roughnessMap = new Texture()
+
+    await applyFabricPaint(meshWith(material), { ...SLOT, materialName: 'mat_chair_seat', gloss: 0.55 })
+
+    expect(material.roughnessMap).toBeNull()
+  })
+
+  it('leaves the file’s own finish alone for a swatch that asks for none', async () => {
+    const map = new Texture()
+    const material = new MeshStandardMaterial({ name: 'mat_chair_seat', roughness: 0.87 })
+    material.roughnessMap = map
+
+    await applyFabricPaint(meshWith(material), { ...SLOT, materialName: 'mat_chair_seat' })
+
+    expect(material.roughness).toBe(0.87)
+    expect(material.roughnessMap).toBe(map)
+  })
+
+  it('takes the sheen back off when the shopper moves from the leather to the wool', async () => {
+    // The repaint path reuses the same material, so without this the wool would be
+    // painted onto a surface still lit like leather - and stay that way for the rest
+    // of the visit.
+    const map = new Texture()
+    const material = new MeshStandardMaterial({ name: 'mat_chair_seat', roughness: 0.9 })
+    material.roughnessMap = map
+    const mesh = meshWith(material)
+
+    await applyFabricPaint(mesh, { ...SLOT, materialName: 'mat_chair_seat', gloss: 0.55 })
+    await applyFabricPaint(mesh, { ...SLOT, materialName: 'mat_chair_seat', gloss: 0 })
+
+    expect(material.roughness).toBe(0.9)
+    expect(material.roughnessMap).toBe(map)
+  })
+
+  it('shines a flat colour too, since a leather can be picked as a plain swatch', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_chair_seat', roughness: 0.9 })
+
+    await applyFabricPaint(meshWith(material), {
+      materialName: 'mat_chair_seat',
+      textureUrl: '',
+      colour: '#1a1a1a',
+      repeat: 1,
+      gloss: 0.55,
+    })
+
+    expect(material.roughness).toBeLessThan(0.9)
+  })
+
+  it('hands the finish back with the rest on a reset', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_chair_seat', roughness: 0.9 })
+    const mesh = meshWith(material)
+
+    await applyFabricPaint(mesh, { ...SLOT, materialName: 'mat_chair_seat', gloss: 0.55 })
+    resetFabricPaint(mesh, 'mat_chair_seat')
+
+    expect(material.roughness).toBe(0.9)
+  })
+})
+
 // A variation that resolves to no paint for a part the previous one DID paint used to
 // leave the old texture sitting on it: the repaint path walks the slots it is handed,
 // and a slot the resolver dropped is simply never revisited. That showed a shopper a

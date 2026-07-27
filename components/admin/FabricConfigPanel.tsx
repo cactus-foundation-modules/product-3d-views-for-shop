@@ -22,6 +22,7 @@ import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureModelWi
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { isCalibrated, modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
+import { detectGloss } from '@/modules/product-3d-views-for-shop/lib/fabric/finish'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 import type { FabricBundle, FabricConfig, P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
@@ -525,20 +526,42 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           // is no per-variation swatch involved, so this one is not a ballpark.
           if (slot.colourOptionId === MANUAL_COLOUR_ID) {
             const colour = parseHexColour(slot.colourManual)
-            return colour ? { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 } : null
+            return colour
+              ? { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0, gloss: 0 }
+              : null
           }
           const opt = colourSources.find((o) => o.id === slot.colourOptionId)
-          const swatch = opt?.values.find((v) => v.swatch && /^https?:\/\//.test(v.swatch))?.swatch
+          const value = opt?.values.find((v) => v.swatch && /^https?:\/\//.test(v.swatch))
           // A source whose values are plain hex colours rather than pictures paints
           // flat, exactly as the storefront will: its first colour stands in for the
           // choice the shopper has not made yet.
-          if (!swatch) {
-            const flat = opt?.values.map((v) => parseHexColour(v.swatch ?? '')).find((c): c is string => c !== null)
-            return flat ? { materialName: slot.materialName, textureUrl: '', colour: flat, repeat: 1, rotationDeg: 0 } : null
+          if (!value?.swatch) {
+            const flat = opt?.values.find((v) => parseHexColour(v.swatch ?? '') !== null)
+            const colour = flat ? parseHexColour(flat.swatch ?? '') : null
+            return colour
+              ? {
+                  materialName: slot.materialName,
+                  textureUrl: '',
+                  colour,
+                  repeat: 1,
+                  rotationDeg: 0,
+                  gloss: detectGloss({ label: flat?.label }),
+                }
+              : null
           }
           const density = densities[slot.materialName] ?? 0
           const repeat = density > 0 ? Math.min(50, Math.max(0.01, 1 / (density * 20))) : 1
-          return { materialName: slot.materialName, textureUrl: swatch, colour: null, repeat, rotationDeg: slot.rotationDeg }
+          // The same reading the storefront will take of the same swatch (see
+          // detectGloss), so a leather looks like leather here too and the admin is
+          // never previewing a finish the shopper will not get.
+          return {
+            materialName: slot.materialName,
+            textureUrl: value.swatch,
+            colour: null,
+            repeat,
+            rotationDeg: slot.rotationDeg,
+            gloss: detectGloss({ label: value.label, textureUrl: value.swatch }),
+          }
         })
         .filter((s): s is FabricBundle['slots'][number] => s !== null),
     [config.slots, colourSources, densities],

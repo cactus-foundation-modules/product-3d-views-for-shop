@@ -251,7 +251,7 @@ describe('composeFabricBundle', () => {
     )
     // Seat colour still applies; scale is neutral until the data is filled in. Back
     // has no colour chosen, so it is skipped entirely.
-    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0 }])
+    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0, gloss: 0 }])
   })
 
   it('takes a hand-typed size for a slot set to Manual, ignoring the attributes', () => {
@@ -383,8 +383,69 @@ describe('composeFabricBundle', () => {
       [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: '', colour: '#ff0000', repeat: 1, rotationDeg: 0 },
+      { materialName: 'Fabric seat', textureUrl: '', colour: '#ff0000', repeat: 1, rotationDeg: 0, gloss: 0 },
     ])
+  })
+
+  // A range with a leather in it used to mean a second model file, its seat authored
+  // shinier, kept in step with the first by hand for the life of the product. The
+  // swatch's own name settles it instead - so what matters here is that the name gets
+  // as far as the bundle, from either place a swatch can come from, and that an
+  // ordinary fabric beside it is composed exactly as it always was.
+  it('gives a part a sheen when the swatch picked for it says leather', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '20cm' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL, label: 'Soft Leather - Black' }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+    )
+    expect(bundle?.slots[0]?.gloss).toBeGreaterThan(0)
+  })
+
+  it('gives one from an attribute-painted part just the same', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '20cm' })] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_FINISH, label: 'Italian Leather Tan', swatch: CRAB_URL },
+      ],
+    )
+    expect(bundle?.slots[0]?.gloss).toBeGreaterThan(0)
+  })
+
+  it('gives one to a leather offered as a plain colour swatch', () => {
+    const bundle = composeFabricBundle(
+      config({ slots: [slot()] }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: '#1A1A1A', label: 'Leather Black' }),
+      [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
+    )
+    expect(bundle?.slots[0]?.colour).toBe('#1a1a1a')
+    expect(bundle?.slots[0]?.gloss).toBeGreaterThan(0)
+  })
+
+  it('leaves an ordinary fabric on the same product matte', () => {
+    const bundle = composeFabricBundle(
+      config(),
+      MODEL_WITH_OBJ,
+      100,
+      selected(
+        { optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL, label: 'Black Leather' },
+        { optionId: OPT_BACK_COLOUR, valueId: VAL_TEAL, swatch: TEAL_URL, label: 'Quest Teal' },
+      ),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20cm' },
+        { attributeId: ATTR_BACK_SIZE, label: '20cm' },
+      ],
+    )
+    expect(bundle?.slots.map((s) => s.gloss)).toEqual([expect.any(Number), 0])
+    expect(bundle?.slots[0]?.gloss).toBeGreaterThan(0)
   })
 
   it('paints from an ATTRIBUTE value when the slot points at one', () => {
@@ -403,7 +464,7 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
     ])
   })
 
@@ -421,7 +482,7 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
     ])
   })
 
@@ -458,7 +519,7 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0, gloss: 0 },
     ])
   })
 
@@ -476,7 +537,7 @@ describe('composeFabricBundle', () => {
       { [CRAB_URL]: '20x20cm' },
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
     ])
   })
 
@@ -555,7 +616,7 @@ describe('composeFabricBundle', () => {
       [],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Frame', textureUrl: '', colour: '#7a5c3a', repeat: 1, rotationDeg: 0 },
+      { materialName: 'Frame', textureUrl: '', colour: '#7a5c3a', repeat: 1, rotationDeg: 0, gloss: 0 },
     ])
   })
 
@@ -627,8 +688,8 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0 },
-      { materialName: 'Fabric back', textureUrl: TEAL_URL, colour: null, repeat: 0.2, rotationDeg: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric back', textureUrl: TEAL_URL, colour: null, repeat: 0.2, rotationDeg: 0, gloss: 0 },
     ])
   })
 
@@ -687,7 +748,7 @@ describe('composeFabricBundle', () => {
     )
     // 200 / (100 * 1 * 10) = 0.2 - painted AND scaled off the product-level values.
     expect(bundle?.slots).toEqual([
-      { materialName: 'Legs', textureUrl: CRAB_URL, colour: null, repeat: 0.2, rotationDeg: 0 },
+      { materialName: 'Legs', textureUrl: CRAB_URL, colour: null, repeat: 0.2, rotationDeg: 0, gloss: 0 },
     ])
   })
 

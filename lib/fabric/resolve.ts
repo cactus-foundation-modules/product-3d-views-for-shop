@@ -4,6 +4,7 @@ import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { MANUAL_SIZE_ID, attributeColourId, optionSizeId, parseHexColour, readColourSource, readSizeSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
+import { detectGloss } from '@/modules/product-3d-views-for-shop/lib/fabric/finish'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -277,16 +278,20 @@ export function composeFabricBundle(
       if (source.kind === 'manual') {
         const colour = parseHexColour(slot.colourManual)
         if (!colour) return null
-        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
+        // No swatch and so no words to read: a hand-typed hex describes a colour and
+        // nothing about the material wearing it, so the part keeps the file's finish.
+        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0, gloss: 0 }
       }
-      // Either route ends in one swatch url: a variation option's selected value, or
-      // the value of an attribute set on this variation. Everything past this point
-      // (scale, rotation) is the same for both.
+      // Either route ends in one swatch: a variation option's selected value, or the
+      // value of an attribute set on this variation. Everything past this point
+      // (scale, rotation, sheen) is the same for both.
       const attributeValue = source.kind === 'attribute' ? sizes.find((z) => matchesSource(z, source.id)) : undefined
-      const swatch =
-        source.kind === 'attribute'
-          ? attributeValue?.swatch ?? ''
-          : selected.find((s) => s.optionId === source.id)?.swatch ?? ''
+      const optionValue = source.kind === 'option' ? selected.find((s) => s.optionId === source.id) : undefined
+      const swatch = (source.kind === 'attribute' ? attributeValue?.swatch : optionValue?.swatch) ?? ''
+      // The words the shop put on the value ("Soft Leather - Black"), which is where
+      // a material is named on both routes. Read for a finish below, alongside the
+      // picture's own filename - see detectGloss.
+      const swatchLabel = (source.kind === 'attribute' ? attributeValue?.label : optionValue?.label) ?? ''
       // Both modules store one visual per value in the same column: a media url for
       // a picture swatch, a hex colour for a plain colour one. A picture is a texture
       // and tiles at true scale; a hex is a flat paint, with nothing to tile and no
@@ -294,7 +299,17 @@ export function composeFabricBundle(
       if (!isHttpUrl(swatch)) {
         const colour = parseHexColour(swatch)
         if (!colour) return null
-        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0 }
+        // A colour-dot value still carries its material in its NAME, so a leather
+        // shown as a plain black dot shines like the leather it is. The dot has no
+        // picture to read a filename off, so the label is the whole of the evidence.
+        return {
+          materialName: slot.materialName,
+          textureUrl: '',
+          colour,
+          repeat: 1,
+          rotationDeg: 0,
+          gloss: detectGloss({ label: swatchLabel }),
+        }
       }
       const textureUrl = swatch
       // The swatch's real size comes from the swatch itself, by either of two roads:
@@ -321,7 +336,14 @@ export function composeFabricBundle(
             : '')
       const swatchCm = parseSwatchCm(sizeLabel)
       const repeat = tileRepeat({ realCm, modelUnits, texelDensity: slot.texelDensity, swatchCm })
-      return { materialName: slot.materialName, textureUrl, colour: null, repeat, rotationDeg: slot.rotationDeg }
+      return {
+        materialName: slot.materialName,
+        textureUrl,
+        colour: null,
+        repeat,
+        rotationDeg: slot.rotationDeg,
+        gloss: detectGloss({ label: swatchLabel, textureUrl }),
+      }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
 

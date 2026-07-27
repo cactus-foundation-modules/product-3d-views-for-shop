@@ -138,6 +138,13 @@ export type FabricBundle = {
     // directional surface (grain, weave, brush) can be laid the right way round
     // without re-exporting the model. 0 leaves the model's own UVs alone.
     rotationDeg: number
+    // How shiny to make the part, 0-1, read from the words on the swatch itself -
+    // see detectGloss in lib/fabric/finish.ts. 0 leaves the material's own finish
+    // untouched, which is what every part did before this and what all but a leather
+    // swatch still does. It is the one property a paint changes beyond the base
+    // colour, and it is what lets one model serve a range with a leather option in
+    // it rather than needing a second file for the leather.
+    gloss: number
   }>
 }
 

@@ -609,13 +609,16 @@ export async function prefetchTexture(url: string): Promise<void> {
   }
 }
 
-// The two baseColor fields a paint touches, on the one material shape both this
-// module's paint and reset paths need. Structural rather than three's Material,
-// because the traverse hands back `unknown` material slots and this is the whole
-// of what either path reads or writes.
+// The fields a paint touches, on the one material shape both this module's paint and
+// reset paths need: the two baseColor ones, and the two that decide how the surface
+// catches the light. Structural rather than three's Material, because the traverse
+// hands back `unknown` material slots and this is the whole of what either path reads
+// or writes.
 type PaintableMaterial = {
   name?: string
   map?: Texture | null
+  roughness?: number
+  roughnessMap?: Texture | null
   color?: {
     r: number
     g: number
@@ -636,7 +639,18 @@ type PaintableMaterial = {
 // through JSON on Material.copy, which would flatten the texture into a plain
 // object. The WeakMap also lets go of an entry with the material it describes, so a
 // disposed model leaves nothing behind here.
-const originalPaint = new WeakMap<object, { map: Texture | null; colour: [number, number, number] | null }>()
+const originalPaint = new WeakMap<
+  object,
+  {
+    map: Texture | null
+    colour: [number, number, number] | null
+    // Null on a material with no PBR roughness at all (a Basic or Lambert one, which
+    // the loaders can still hand back), which is also the case where there is no
+    // finish to change and nothing to put back.
+    roughness: number | null
+    roughnessMap: Texture | null
+  }
+>()
 
 // First write wins: what is recorded must be the FILE's own look, never a previous
 // paint's, or reverting would hand back the last colour instead of the original.
@@ -645,7 +659,43 @@ function recordOriginalPaint(mat: PaintableMaterial): void {
   originalPaint.set(mat, {
     map: mat.map ?? null,
     colour: mat.color ? [mat.color.r, mat.color.g, mat.color.b] : null,
+    roughness: typeof mat.roughness === 'number' ? mat.roughness : null,
+    roughnessMap: mat.roughnessMap ?? null,
   })
+}
+
+/**
+ * Give a material the sheen its swatch asks for - or hand back the finish the model's
+ * author gave it, when the swatch asks for none.
+ *
+ * `gloss` is the swatch's own reading (see detectGloss): 0 for a material that says
+ * nothing about how it catches the light, up to 1 for a mirror. It becomes a
+ * roughness, which is the same scale the other way round, clamped off 0 because a
+ * perfectly smooth dielectric is a pinprick highlight on a black surface rather than
+ * the soft sheen a leather actually has.
+ *
+ * The material's roughnessMap has to go with it: three MULTIPLIES the scalar by the
+ * map's green channel, so a part authored as cloth carries a map that would hold it
+ * matte however low the number goes - the seat would stay flat while the piping
+ * beside it shone, which reads as a rendering fault rather than as leather. Recorded
+ * first and restored below, exactly as the base colour map is.
+ *
+ * The unglossed direction is not a no-op: the repaint path reuses the same material,
+ * so a shopper moving from the leather to the wool has to get the wool's own finish
+ * back and not the leather's. Restoring on every paint is what makes that automatic.
+ */
+function applyGloss(mat: PaintableMaterial, gloss: number): void {
+  // Nothing with a roughness to set - the surface has no PBR response to change, and
+  // writing the property onto it would only invent one three will not read.
+  if (typeof mat.roughness !== 'number') return
+  const original = originalPaint.get(mat)
+  if (gloss <= 0) {
+    if (original?.roughness !== null && original?.roughness !== undefined) mat.roughness = original.roughness
+    if (original) mat.roughnessMap = original.roughnessMap
+    return
+  }
+  mat.roughness = Math.min(1, Math.max(0.08, 1 - gloss))
+  mat.roughnessMap = null
 }
 
 /**
@@ -677,6 +727,10 @@ export function resetFabricPaint(model: Object3D, materialName: string): void {
       if (!original) continue
       mat.map = original.map
       if (original.colour && mat.color) mat.color.setRGB(...original.colour)
+      // The finish too, or a part that was last painted a leather keeps its sheen
+      // while losing its colour - the one combination that looks least like anything
+      // the file ever shipped as.
+      applyGloss(mat, 0)
       mat.needsUpdate = true
     }
   })
@@ -685,10 +739,15 @@ export function resetFabricPaint(model: Object3D, materialName: string): void {
 /**
  * Paint one named material slot: either with an external texture at a given tile
  * repeat and rotation, or - when the slot carries a flat `colour` - with that colour
- * and no texture at all. Only the baseColor (`map`/`color`) is replaced; the
- * material's normalMap, roughness and the rest are left untouched, so the surface
- * keeps the model's own relief and lighting response and only its colour and weave
- * change.
+ * and no texture at all. The baseColor (`map`/`color`) is replaced, and the finish
+ * (`roughness`/`roughnessMap`) where the slot's `gloss` asks for one; the material's
+ * normalMap and the rest are left untouched, so the surface keeps the model's own
+ * relief and only its colour, weave and shine change.
+ *
+ * `gloss` is how shiny the swatch itself reads (see detectGloss) - it is what lets a
+ * range with a leather option in it run off ONE model file, rather than a second copy
+ * of the same geometry existing solely to carry a shinier material. Absent or 0, the
+ * part keeps the finish its author gave it, which is what every paint did before.
  *
  * Matches by the glTF material NAME, not a mesh index: that name is the contract
  * between a saved config and the file (see lib/db/fabric-config.ts). One glTF
@@ -702,7 +761,14 @@ export function resetFabricPaint(model: Object3D, materialName: string): void {
  */
 export async function applyFabricPaint(
   model: Object3D,
-  paint: { materialName: string; textureUrl: string; colour?: string | null; repeat: number; rotationDeg?: number },
+  paint: {
+    materialName: string
+    textureUrl: string
+    colour?: string | null
+    repeat: number
+    rotationDeg?: number
+    gloss?: number
+  },
 ): Promise<Texture | null> {
   const three = await import('three')
 
@@ -723,6 +789,7 @@ export async function applyFabricPaint(
         recordOriginalPaint(mat)
         mat.map = null
         mat.color?.copy(colour)
+        applyGloss(mat, paint.gloss ?? 0)
         mat.needsUpdate = true
       }
     })
@@ -811,6 +878,7 @@ export async function applyFabricPaint(
       // branch above writes that colour into `color`, and the repaint path reuses
       // the same material.
       mat.color?.setRGB(1, 1, 1)
+      applyGloss(mat, paint.gloss ?? 0)
       mat.needsUpdate = true
     }
   })
