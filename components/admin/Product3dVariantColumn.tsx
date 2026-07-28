@@ -25,7 +25,9 @@ import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 import { ModelUploadCancelled, uploadModel } from '@/modules/product-3d-views-for-shop/lib/upload-model-client'
 import { reloadProductModels, useProductModels } from '@/modules/product-3d-views-for-shop/lib/use-product-models'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
+import { Model3dPreviewModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPreviewModal'
 import { useModelClashPrompt } from '@/modules/product-3d-views-for-shop/components/admin/useModelClashPrompt'
+import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 
 const box: CSSProperties = {
   width: 36, height: 36, borderRadius: 'var(--radius-md)',
@@ -50,6 +52,9 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [picking, setPicking] = useState(false)
+  // The model whose preview is open, or null. Held by value rather than by id so a
+  // list refresh mid-preview cannot leave the dialogue pointing at nothing.
+  const [previewing, setPreviewing] = useState<P3dAdminModel | null>(null)
   const [error, setError] = useState<string | null>(null)
   const clashPrompt = useModelClashPrompt()
 
@@ -103,16 +108,23 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
       <span style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
         {mine.map((m) => (
           <span key={m.id} style={{ display: 'inline-flex', gap: '0.125rem', alignItems: 'center' }}>
-            <span
-              title={m.filename}
+            {/* The badge is the way in to seeing the thing. A filename in a
+                tooltip says which file is attached; only a look says whether it
+                is the RIGHT file for this row, and the alternative was saving
+                and hunting the combination down on the storefront. */}
+            <button
+              type="button"
+              onClick={() => setPreviewing(m)}
+              title={`${m.filename} - click to view it in 3D`}
+              aria-label={`View the ${formatLabel(m.format)} model for ${label} in 3D`}
               style={{
                 ...box, width: 'auto', padding: '0 0.375rem',
                 border: '1px solid var(--color-primary)', background: 'var(--color-primary-subtle)',
-                color: 'var(--color-primary)',
+                color: 'var(--color-primary)', fontFamily: 'inherit', cursor: 'pointer',
               }}
             >
               {formatLabel(m.format)}
-            </span>
+            </button>
             <button
               type="button"
               onClick={() => void remove(m.id)}
@@ -156,6 +168,16 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
         targetLabel={label}
         onChanged={() => void reloadProductModels(productId)}
         onClose={() => setPicking(false)}
+      />
+    )}
+
+    {previewing && (
+      <Model3dPreviewModal
+        productId={productId}
+        childProductId={childProductId}
+        model={previewing}
+        label={label}
+        onClose={() => setPreviewing(null)}
       />
     )}
     </>
