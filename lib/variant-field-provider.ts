@@ -106,8 +106,11 @@ export const product3dVariantFieldProvider = {
   // Always one column: unlike attributes, whose columns depend on the product, any
   // variant can have a 3D file, so the column is offered on every product. A
   // variant with none simply leaves its cell blank.
+  // `kind: 'file'` tells shop-variations the cell holds file urls rather than a
+  // label, which is what lets its cross-product browser offer a "lost 3D files"
+  // filter for models whose blob has gone missing. Nothing here checks urls.
   async listColumns() {
-    return [{ key: COLUMN_KEY, label: COLUMN_LABEL, order: 10 }]
+    return [{ key: COLUMN_KEY, label: COLUMN_LABEL, order: 10, kind: 'file' as const }]
   },
 
   async getValues(_productId: string, childProductIds: string[]) {
