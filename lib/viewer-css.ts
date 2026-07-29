@@ -35,6 +35,16 @@ export const viewerChromeCss = `
   background:var(--color-fg);color:var(--color-bg);opacity:.6;white-space:nowrap;
   transition:opacity .15s ease}
 .p3d-reset:hover,.p3d-reset:focus-visible{opacity:.9}
+/* "Click to interact": the stage saying it has not taken the mouse wheel, and how
+   to give it. Bottom-left, and only ever on screen before the first press, so it
+   never shares the stage with the Reset view button. pointer-events none - the
+   press it is asking for must land on the stage underneath, not on the label. */
+.p3d-interact{position:absolute;left:8px;bottom:8px;z-index:2;pointer-events:none;
+  font-size:11px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;
+  background:var(--color-fg);color:var(--color-bg);opacity:.8;white-space:nowrap}
+/* While that pill holds the bottom-left corner, "View in your room" steps up out of
+   its way rather than the two stacking on top of each other. */
+.p3d-stage.gated .p3d-ar{bottom:38px}
 /* "View in your room". Bottom-left, opposite the Reset button, above the centred
    hint. One rule covers both shapes it takes (a <button> for WebXR, an <a rel="ar">
    for Quick Look) - both carry the p3d-ar class. Solid fill on the theme's own

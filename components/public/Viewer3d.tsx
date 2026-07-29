@@ -120,6 +120,27 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // the button has no reason to be on screen.
   const [touched, setTouched] = useState(false)
   const [moved, setMoved] = useState(false)
+  // Whether the shopper has claimed the stage yet - one click or tap inside it, or
+  // moving focus onto the canvas.
+  //
+  // Until they have, the wheel is NOT the viewer's: a shopper scrolling the product
+  // page whose pointer happens to pass over the model had the page stop dead under
+  // them and the model zoom instead, which is the single most disliked thing a 3D
+  // embed does. So zoom is switched off on the controls until the stage is asked
+  // for by name, and the pill in the corner says as much. Dragging is untouched -
+  // a drag is already a deliberate act on the model and cannot be arrived at by
+  // scrolling past.
+  //
+  // The ref shadows the state for the build effect, which reads it at build time
+  // and must see the current answer rather than its own mount-time closure - a
+  // model swap after the shopper has taken hold must not lock the wheel again.
+  const [interactive, setInteractive] = useState(false)
+  const interactiveRef = useRef(false)
+  const claimStage = (): void => {
+    if (interactiveRef.current) return
+    interactiveRef.current = true
+    setInteractive(true)
+  }
 
   // Kept across renders so the repaint effect below can find the built model and
   // its currently-applied fabric textures without rebuilding the whole viewer. The
@@ -155,6 +176,11 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // The live renderer, kept only so the brightness effect below can reach it.
   // Null before the first build finishes and after a dispose.
   const rendererRef = useRef<ThreeRenderer | null>(null)
+
+  // The live controls, kept only so the wheel can be switched on the moment the
+  // shopper claims the stage - same reason as rendererRef, rather than rebuilding
+  // the whole WebGL context to change one boolean. Null between builds.
+  const controlsRef = useRef<OrbitControls | null>(null)
 
   // Asks the render loop for one more frame. The loop only draws when something has
   // actually changed (see `needsRender` in build), so anything that changes what the
@@ -384,6 +410,11 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         controls.enableDamping = true
         controls.dampingFactor = settings.dampingFactor
         controls.enablePan = settings.enablePan
+        // The wheel belongs to the page until the shopper claims the stage (see
+        // `interactive` above). Read off the ref so a rebuild - a model swap on an
+        // option change - keeps the wheel they have already earned.
+        controls.enableZoom = interactiveRef.current
+        controlsRef.current = controls
         // Bounded so a shopper cannot lose the model: zoomed through it, or pushed
         // so far away it becomes a dot they then have to hunt for. Both are easy to
         // do by accident on a trackpad and neither has an obvious way back.
@@ -906,6 +937,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           controls.removeEventListener('start', takeHold)
           controls.dispose()
           invalidateRef.current = null
+          controlsRef.current = null
           disposeShadow?.()
           scene.remove(pivot)
           // This viewer's own fabric clones, freed before the model they hang off.
@@ -939,6 +971,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         paintedRef.current.clear()
         rendererRef.current = null
         invalidateRef.current = null
+        controlsRef.current = null
         disposeModel(model)
         disposeEnvironment(renderer)
         renderer.dispose()
@@ -1064,6 +1097,16 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fabricSignature, builtUrl])
 
+  // Hand the wheel over the moment the shopper claims the stage. Pushed straight at
+  // the live controls rather than rebuilt, for the same reason brightness is: it is
+  // one boolean, and tearing down a WebGL context to change it would be absurd.
+  // `builtUrl` is in the deps so a claim that lands while a model is still loading
+  // is applied again once the controls actually exist.
+  useEffect(() => {
+    const controls = controlsRef.current
+    if (controls) controls.enableZoom = interactive
+  }, [interactive, builtUrl, generation])
+
   // Which AR route this device has, decided once when the viewer mounts and
   // re-decided if the owner's AR toggle changes. Pure device capability - it does
   // not depend on the model or its format (AR exports the rendered scene, not the
@@ -1156,7 +1199,15 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   }, [])
 
   return (
-    <div className="p3d-stage" ref={hostRef}>
+    // onPointerDown rather than onClick: a claim should land on the way DOWN, so
+    // the very press that starts a drag also hands over the wheel, and a tap that
+    // never becomes a click still counts. `gated` is what lifts the AR button clear
+    // of the pill sharing its corner.
+    <div
+      className={`p3d-stage${interactive ? '' : ' gated'}`}
+      ref={hostRef}
+      onPointerDown={claimStage}
+    >
       {/* Focusable, and labelled with what it is and how it works, because a canvas
           tells assistive technology nothing on its own and the controls up to now were
           a pointer or nothing at all.
@@ -1175,6 +1226,10 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         ref={canvasRef}
         className="p3d-stage-canvas"
         tabIndex={0}
+        // Tabbing onto the canvas claims the stage too: a keyboard shopper has
+        // asked for it as plainly as a click, and the arrow and zoom keys are no
+        // use to them behind a gate they have no pointer to open.
+        onFocus={claimStage}
         aria-label="3D model of this product. Use the arrow keys to turn it, plus and minus to zoom, and Home to return to the opening view."
       />
       {status === 'loading' && <p className="p3d-note">Loading the 3D model…</p>}
@@ -1212,8 +1267,17 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
       {status === 'ready' && (
         <span className="p3d-hint p3d-hint-keys">Arrow keys to turn · + and − to zoom</span>
       )}
-      {status === 'ready' && !touched && (
+      {/* Only once the wheel is actually the viewer's: before that the line would
+          promise a scroll-zoom the stage is deliberately refusing, and the gate pill
+          below is the message instead. */}
+      {status === 'ready' && interactive && !touched && (
         <span className="p3d-hint p3d-hint-drag">Drag to turn · scroll to zoom</span>
+      )}
+      {/* The gate, in words: the stage is not taking the wheel until it is asked.
+          Goes for good on the first press, which is also what hands the wheel over
+          (see `interactive`), leaving the corner to the Reset view button. */}
+      {status === 'ready' && !interactive && (
+        <span className="p3d-interact">Click to interact</span>
       )}
       {/* The way back from a view the shopper has turned, zoomed or panned
           themselves into and cannot easily undo by hand. It appears only once
@@ -1221,7 +1285,13 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           offering to undo nothing - and goes again the moment it is used. Sits
           above the hint, which is centred and can reach under it on a narrow
           stage. */}
-      {status === 'ready' && moved && (
+      {/* Held back while the gate pill is up so the two are never on the stage
+          together: the pill is the one instruction that matters at that point, and
+          Reset view returns as soon as the shopper has claimed the stage. (A
+          pointer can only trip `moved` by claiming the stage first anyway; this
+          covers the keyboard, where focus and the first arrow key can arrive in
+          the same breath.) */}
+      {status === 'ready' && interactive && moved && (
         <button type="button" className="p3d-reset" onClick={() => resetRef.current?.()}>
           Reset view
         </button>

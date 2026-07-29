@@ -188,6 +188,11 @@ const css = `
   text-align:center;padding:1rem;font-size:.8125rem;color:var(--color-text-muted)}
 .p3d-hint{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:1;pointer-events:none;
   font-size:11px;line-height:1;padding:5px 9px;border-radius:999px;background:var(--color-fg);color:var(--color-bg);opacity:.75}
+/* The viewer's "Click to interact" gate pill (see lib/viewer-css.ts). This panel
+   carries its own trimmed copy of the viewer chrome, so the rule is repeated here. */
+.p3d-interact{position:absolute;left:8px;bottom:8px;z-index:2;pointer-events:none;
+  font-size:11px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;
+  background:var(--color-fg);color:var(--color-bg);opacity:.8;white-space:nowrap}
 `
 
 export function FabricConfigPanel({ productId }: { productId: string }) {

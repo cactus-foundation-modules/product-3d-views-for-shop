@@ -73,6 +73,11 @@ const css = `
   background:var(--color-fg);color:var(--color-bg);opacity:.6;white-space:nowrap;
   transition:opacity .15s ease}
 .p3d-reset:hover,.p3d-reset:focus-visible{opacity:.9}
+/* The viewer's "Click to interact" gate pill (see lib/viewer-css.ts). This panel
+   carries its own trimmed copy of the viewer chrome, so the rule is repeated here. */
+.p3d-interact{position:absolute;left:8px;bottom:8px;z-index:2;pointer-events:none;
+  font-size:11px;font-weight:600;line-height:1;padding:5px 9px;border-radius:999px;
+  background:var(--color-fg);color:var(--color-bg);opacity:.8;white-space:nowrap}
 @media (prefers-reduced-motion:reduce){.p3d-reset{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
