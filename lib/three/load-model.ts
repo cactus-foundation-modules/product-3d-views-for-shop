@@ -758,6 +758,11 @@ export function resetFabricPaint(model: Object3D, materialName: string): void {
  * Returns the Texture it set - or null when the model has no material of that name -
  * so the caller can dispose it when it swaps it out. The caller owns that disposal;
  * the shared master in the cache above is not ours to free here.
+ *
+ * `autoScale` is the standing repair for a model the saved config has never measured
+ * (see measureFabricRepeat): the two terms the resolver could not supply are the two
+ * this side can read straight off the loaded mesh, so it does, rather than falling
+ * back to repeat 1 and quietly showing the weave at the wrong size.
  */
 export async function applyFabricPaint(
   model: Object3D,
@@ -768,6 +773,7 @@ export async function applyFabricPaint(
     repeat: number
     rotationDeg?: number
     gloss?: number
+    autoScale?: FabricAutoScale | null
   },
 ): Promise<Texture | null> {
   const three = await import('three')
@@ -798,6 +804,12 @@ export async function applyFabricPaint(
 
   const master = await loadTexture(paint.textureUrl)
   const rotationRad = ((paint.rotationDeg ?? 0) * Math.PI) / 180
+  // Measured here only when the resolver said it could not work the tiling out from
+  // what is saved. A calibrated slot keeps the server's number untouched, so nothing
+  // that tiles correctly today changes.
+  const repeat = paint.autoScale
+    ? await measureFabricRepeat(model, paint.materialName, paint.autoScale)
+    : paint.repeat
 
   const build = (existing: Texture | null | undefined): Texture => {
     const tex = master.clone()
@@ -841,7 +853,7 @@ export async function applyFabricPaint(
     tex.center.set(base.center[0], base.center[1])
     tex.offset.set(base.offset[0], base.offset[1])
     tex.userData.p3dBaseTransform = base
-    tex.repeat.set(paint.repeat, paint.repeat)
+    tex.repeat.set(repeat, repeat)
     // The admin's turn, on top of whatever the model's own map already carried, and
     // about the middle of the tile rather than its corner - a corner pivot slides the
     // pattern off the part as well as turning it, which reads as a bug. Only touched
@@ -884,6 +896,68 @@ export async function applyFabricPaint(
   })
 
   return texture
+}
+
+/**
+ * The shop facts a tile repeat needs that CANNOT be read off the mesh: the product's
+ * real size along the scale axis, and how much real fabric one swatch picture covers.
+ * Both are things a shop states about itself, so a missing one leaves the weave at
+ * repeat 1 and always did - there is nothing here to measure our way out of.
+ *
+ * The two terms this deliberately leaves out - the model's extent in its own units,
+ * and the material's texel density - are properties OF THE FILE, and so are measured
+ * from the file (see measureFabricRepeat) rather than read from a saved config.
+ */
+export type FabricAutoScale = {
+  realCm: number
+  scaleAxis: 'height' | 'width'
+  swatchCm: number
+}
+
+/** Cache key on a model clone, so a repaint does not re-walk the geometry. */
+type MeasuredModel = Object3D & { userData: { p3dMeasured?: Record<string, number> } }
+
+/**
+ * The tile repeat for a model the saved config carries no measurement for, worked
+ * out from the mesh in front of us.
+ *
+ * The same formula as tileRepeat in lib/fabric/resolve.ts, with the two measured
+ * terms taken live instead of out of the config. This exists because those two terms
+ * are the ones that GO MISSING: they are written only when an admin presses Detect
+ * and saves, so a model attached afterwards has none, and every fabric surface on
+ * that one variation silently dropped to repeat 1 - the colours all still painted,
+ * so nothing looked broken except the size of the weave. Measuring here means
+ * attaching a model is enough on its own, which is what an admin reasonably expects
+ * of a file whose size the viewer can see perfectly well for itself.
+ *
+ * Density is measured per MODEL rather than taken from the config's stored number,
+ * which is measured from one chosen model and shared across all of them: a file
+ * unwrapped differently to its siblings would otherwise be tiled by a density that
+ * belongs to a different mesh. There is no calibration to preserve on this path by
+ * definition, so the file's own answer is strictly the better one.
+ *
+ * Cached on the model clone: a shopper changing options repaints the same object
+ * repeatedly, and the answer cannot change between repaints of one file.
+ */
+export async function measureFabricRepeat(
+  model: Object3D,
+  materialName: string,
+  scale: FabricAutoScale,
+): Promise<number> {
+  const cache = (model as MeasuredModel).userData
+  const key = `${scale.scaleAxis}:${materialName}`
+  cache.p3dMeasured ??= {}
+  const hit = cache.p3dMeasured[key]
+  if (hit !== undefined) return hit
+
+  const units = scale.scaleAxis === 'width' ? await measureModelWidth(model) : await measureModelHeight(model)
+  const density = await measureTexelDensity(model, materialName)
+  const repeat = scale.realCm / (units * density * scale.swatchCm)
+  // Same guard as tileRepeat: a model with no UVs on that material measures 0, and a
+  // degenerate result must leave the weave alone rather than scale it by an infinity.
+  const safe = Number.isFinite(repeat) && repeat > 0 ? repeat : 1
+  cache.p3dMeasured[key] = safe
+  return safe
 }
 
 /**

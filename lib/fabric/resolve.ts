@@ -280,7 +280,7 @@ export function composeFabricBundle(
         if (!colour) return null
         // No swatch and so no words to read: a hand-typed hex describes a colour and
         // nothing about the material wearing it, so the part keeps the file's finish.
-        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0, gloss: 0 }
+        return { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0, gloss: 0, autoScale: null }
       }
       // Either route ends in one swatch: a variation option's selected value, or the
       // value of an attribute set on this variation. Everything past this point
@@ -309,6 +309,7 @@ export function composeFabricBundle(
           repeat: 1,
           rotationDeg: 0,
           gloss: detectGloss({ label: swatchLabel }),
+          autoScale: null,
         }
       }
       const textureUrl = swatch
@@ -343,6 +344,7 @@ export function composeFabricBundle(
         repeat,
         rotationDeg: slot.rotationDeg,
         gloss: detectGloss({ label: swatchLabel, textureUrl }),
+        autoScale: autoScaleFor({ realCm, modelUnits, texelDensity: slot.texelDensity, swatchCm }, config.scaleAxis),
       }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
@@ -411,6 +413,31 @@ export function measuredUnitsFor(
   // needing every configured product opened and saved a second time.
   for (const [key, value] of byUrl) units.set(modelScaleKey(key), value)
   return units.get(modelScaleKey(url)) ?? 0
+}
+
+/**
+ * The terms a viewer needs to measure the tiling for itself, or null when it should
+ * not try.
+ *
+ * Emitted only when the shop's own two facts are BOTH present and it is a measured
+ * term that is missing. That split is the whole point: `realCm` and `swatchCm` are
+ * things the shop states (a product's height, a swatch's coverage) and no amount of
+ * looking at the mesh will reveal them, so their absence still means repeat 1 exactly
+ * as before. `modelUnits` and `texelDensity` are facts about the FILE, which the
+ * viewer has open in front of it, so their absence need not have meant anything at
+ * all - and until now it silently meant an un-scaled weave on that one variation.
+ *
+ * Null when the config is fully calibrated, so a working product keeps the number the
+ * resolver already worked out and this path changes nothing for it.
+ */
+export function autoScaleFor(
+  input: { realCm: number | null; modelUnits: number; texelDensity: number; swatchCm: number | null },
+  scaleAxis: 'height' | 'width',
+): { realCm: number; scaleAxis: 'height' | 'width'; swatchCm: number } | null {
+  const { realCm, modelUnits, texelDensity, swatchCm } = input
+  if (!realCm || !swatchCm) return null
+  if (modelUnits > 0 && texelDensity > 0) return null
+  return { realCm, scaleAxis, swatchCm }
 }
 
 export function tileRepeat(input: {

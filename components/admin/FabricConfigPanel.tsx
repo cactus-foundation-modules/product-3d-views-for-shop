@@ -532,7 +532,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           if (slot.colourOptionId === MANUAL_COLOUR_ID) {
             const colour = parseHexColour(slot.colourManual)
             return colour
-              ? { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0, gloss: 0 }
+              ? { materialName: slot.materialName, textureUrl: '', colour, repeat: 1, rotationDeg: 0, gloss: 0, autoScale: null }
               : null
           }
           const opt = colourSources.find((o) => o.id === slot.colourOptionId)
@@ -551,6 +551,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   repeat: 1,
                   rotationDeg: 0,
                   gloss: detectGloss({ label: flat?.label }),
+                  autoScale: null,
                 }
               : null
           }
@@ -566,6 +567,10 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
             repeat,
             rotationDeg: slot.rotationDeg,
             gloss: detectGloss({ label: value.label, textureUrl: value.swatch }),
+            // Null on purpose: this preview is a labelled ballpark against a nominal
+            // swatch, not the storefront's true-scale tiling, so there is nothing here
+            // for the viewer to measure its way to.
+            autoScale: null,
           }
         })
         .filter((s): s is FabricBundle['slots'][number] => s !== null),

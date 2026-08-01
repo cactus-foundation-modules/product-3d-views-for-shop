@@ -145,6 +145,16 @@ export type FabricBundle = {
     // colour, and it is what lets one model serve a range with a leather option in
     // it rather than needing a second file for the leather.
     gloss: number
+    // Set when `repeat` above could NOT be worked out from the saved config, and the
+    // viewer should measure the model instead of trusting it. Null - the normal case -
+    // means the config had everything and `repeat` is final.
+    //
+    // Only ever set when the shop's own two facts (the product's real size, the
+    // swatch's real size) are present and it is the MEASUREMENTS that are missing,
+    // since those are the only ones the viewer can supply for itself. A model attached
+    // after the last Detect+Save has none, which used to leave that one variation's
+    // weave at repeat 1 with nothing said about it - see measureFabricRepeat.
+    autoScale: { realCm: number; scaleAxis: 'height' | 'width'; swatchCm: number } | null
   }>
 }
 

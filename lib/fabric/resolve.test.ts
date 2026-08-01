@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { composeFabricBundle, measuredUnitsFor, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { autoScaleFor, composeFabricBundle, measuredUnitsFor, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -107,6 +107,47 @@ describe('parseSwatchCm', () => {
   it('returns null when the label carries no number', () => {
     expect(parseSwatchCm('one size')).toBeNull()
     expect(parseSwatchCm('')).toBeNull()
+  })
+})
+
+// tileRepeat returning 1 is indistinguishable, at the call site, between "this genuinely
+// tiles once" and "I could not work it out" - and the second silently mis-drew the weave
+// on any model attached since the last Detect+Save. autoScaleFor is what separates the
+// two, and says so to the viewer, which can measure the missing half for itself.
+describe('autoScaleFor', () => {
+  const CALIBRATED = { realCm: 200, modelUnits: 100, texelDensity: 1, swatchCm: 20 }
+
+  it('says nothing when the config measured everything', () => {
+    // The working case must stay untouched: a null here is what keeps the resolver's
+    // own number final for every product already tiling correctly.
+    expect(autoScaleFor(CALIBRATED, 'height')).toBeNull()
+  })
+
+  it('asks the viewer to measure a model the config never measured', () => {
+    // A model attached after the last save - exactly the Eclipse folding-arms case.
+    expect(autoScaleFor({ ...CALIBRATED, modelUnits: 0 }, 'height')).toEqual({
+      realCm: 200,
+      scaleAxis: 'height',
+      swatchCm: 20,
+    })
+  })
+
+  it('asks the viewer to measure when the material has no density recorded', () => {
+    expect(autoScaleFor({ ...CALIBRATED, texelDensity: 0 }, 'width')).toEqual({
+      realCm: 200,
+      scaleAxis: 'width',
+      swatchCm: 20,
+    })
+  })
+
+  it('stays silent when the shop has not said how big the product is', () => {
+    // Not something any amount of looking at the mesh can answer, so this stays
+    // uncalibrated exactly as it always did rather than inventing a size.
+    expect(autoScaleFor({ ...CALIBRATED, realCm: null, modelUnits: 0 }, 'height')).toBeNull()
+  })
+
+  it('stays silent when the swatch has no real size', () => {
+    expect(autoScaleFor({ ...CALIBRATED, swatchCm: null, modelUnits: 0 }, 'height')).toBeNull()
   })
 })
 
@@ -251,7 +292,7 @@ describe('composeFabricBundle', () => {
     )
     // Seat colour still applies; scale is neutral until the data is filled in. Back
     // has no colour chosen, so it is skipped entirely.
-    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0, gloss: 0 }])
+    expect(bundle?.slots).toEqual([{ materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0, gloss: 0, autoScale: null }])
   })
 
   it('takes a hand-typed size for a slot set to Manual, ignoring the attributes', () => {
@@ -383,7 +424,7 @@ describe('composeFabricBundle', () => {
       [{ attributeId: ATTR_HEIGHT, label: '200cm' }],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: '', colour: '#ff0000', repeat: 1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric seat', textureUrl: '', colour: '#ff0000', repeat: 1, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 
@@ -464,7 +505,7 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 
@@ -482,7 +523,7 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 
@@ -519,7 +560,38 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 1, rotationDeg: 0, gloss: 0, autoScale: null },
+    ])
+  })
+
+  it('hands the viewer the terms to measure a model the config was never told the size of', () => {
+    // modelUnits 0 is a model attached since the last Detect+Save. The Eclipse chair
+    // shipped exactly this: four of its five models measured, the folding-arms one
+    // not, so that one variation alone drew its weave at a fraction of true size with
+    // nothing anywhere to say why. The size facts are both here, so the only missing
+    // half is the one the viewer can read off the file itself.
+    const bundle = composeFabricBundle(
+      config({ slots: [slot({ colourOptionId: attributeColourId(ATTR_FINISH), sizeAttributeId: MANUAL_SIZE_ID, sizeManual: '20cm' })] }),
+      MODEL_WITH_OBJ,
+      0,
+      selected(),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_FINISH, label: 'Oak', swatch: CRAB_URL },
+      ],
+    )
+    expect(bundle?.slots).toEqual([
+      {
+        materialName: 'Fabric seat',
+        textureUrl: CRAB_URL,
+        colour: null,
+        // Still 1 from the resolver, which cannot do better - but no longer the last
+        // word, because autoScale tells the viewer to work it out from the mesh.
+        repeat: 1,
+        rotationDeg: 0,
+        gloss: 0,
+        autoScale: { realCm: 200, scaleAxis: 'height', swatchCm: 20 },
+      },
     ])
   })
 
@@ -537,7 +609,7 @@ describe('composeFabricBundle', () => {
       { [CRAB_URL]: '20x20cm' },
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 
@@ -616,7 +688,7 @@ describe('composeFabricBundle', () => {
       [],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Frame', textureUrl: '', colour: '#7a5c3a', repeat: 1, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Frame', textureUrl: '', colour: '#7a5c3a', repeat: 1, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 
@@ -688,8 +760,8 @@ describe('composeFabricBundle', () => {
       ],
     )
     expect(bundle?.slots).toEqual([
-      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0 },
-      { materialName: 'Fabric back', textureUrl: TEAL_URL, colour: null, repeat: 0.2, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Fabric seat', textureUrl: CRAB_URL, colour: null, repeat: 0.1, rotationDeg: 0, gloss: 0, autoScale: null },
+      { materialName: 'Fabric back', textureUrl: TEAL_URL, colour: null, repeat: 0.2, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 
@@ -748,7 +820,7 @@ describe('composeFabricBundle', () => {
     )
     // 200 / (100 * 1 * 10) = 0.2 - painted AND scaled off the product-level values.
     expect(bundle?.slots).toEqual([
-      { materialName: 'Legs', textureUrl: CRAB_URL, colour: null, repeat: 0.2, rotationDeg: 0, gloss: 0 },
+      { materialName: 'Legs', textureUrl: CRAB_URL, colour: null, repeat: 0.2, rotationDeg: 0, gloss: 0, autoScale: null },
     ])
   })
 

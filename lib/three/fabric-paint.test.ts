@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Color, Mesh, MeshStandardMaterial, Texture } from 'three'
+import { BufferGeometry, Color, Float32BufferAttribute, Mesh, MeshStandardMaterial, Texture } from 'three'
 import { applyFabricPaint, resetFabricPaint } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 
 // The configurator's promise is that one swatch means one finish, whichever file a
@@ -259,5 +259,77 @@ describe('resetFabricPaint', () => {
     expect(back.map).toBeNull()
     expect(seat.map).not.toBeNull()
     expect(seat.color.getHex()).toBe(0xffffff)
+  })
+})
+
+// A model attached after the last Detect+Save carries no measurement in the config, and
+// every fabric surface on that variation used to fall to repeat 1 - silently, since the
+// colours all still painted. These hold the repair: the two terms that go missing are
+// both readable off the mesh, so the viewer reads them rather than giving up.
+//
+// One metre square, unwrapped 0..1, so its texel density is exactly 1 and its height
+// exactly 1: every expected repeat below is then realCm / swatchCm by hand.
+function unitSquare(material: MeshStandardMaterial, uvScale = 1): Mesh {
+  const geometry = new BufferGeometry()
+  // Non-indexed, two triangles, in the XY plane - the same wind order GLTFLoader gives.
+  geometry.setAttribute(
+    'position',
+    new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0], 3),
+  )
+  geometry.setAttribute(
+    'uv',
+    new Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1].map((v) => v * uvScale), 2),
+  )
+  return new Mesh(geometry, material)
+}
+
+describe('applyFabricPaint autoScale', () => {
+  const AUTO = { realCm: 200, scaleAxis: 'height' as const, swatchCm: 20 }
+
+  it('measures the tiling off the mesh when the config never measured the model', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_table_top' })
+    // repeat 1 is what the resolver sends for an unmeasured model. Were it trusted,
+    // the weave would draw at a 200th of its real size.
+    const tex = await applyFabricPaint(unitSquare(material), { ...SLOT, repeat: 1, autoScale: AUTO })
+
+    expect(tex?.repeat.x).toBeCloseTo(10)
+    expect(tex?.repeat.y).toBeCloseTo(10)
+  })
+
+  it('scales by the density of THIS file, not one shared from another model', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_table_top' })
+    // The same square unwrapped twice as densely - the Eclipse HAF-arms case, where one
+    // file in a range came back from the supplier at a different scale to its siblings.
+    // Its weave has to come out the same size on screen regardless.
+    const tex = await applyFabricPaint(unitSquare(material, 2), { ...SLOT, repeat: 1, autoScale: AUTO })
+
+    expect(tex?.repeat.x).toBeCloseTo(5)
+  })
+
+  it('leaves a calibrated slot exactly as the resolver worked it out', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_table_top' })
+    // autoScale null is the normal case, and this path must not touch it: a product
+    // that tiles correctly today has to keep tiling identically.
+    const tex = await applyFabricPaint(unitSquare(material), { ...SLOT, repeat: 0.25, autoScale: null })
+
+    expect(tex?.repeat.x).toBeCloseTo(0.25)
+  })
+
+  it('keeps the same answer across a repaint, so changing option does not resize the weave', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_table_top' })
+    const mesh = unitSquare(material)
+
+    const first = await applyFabricPaint(mesh, { ...SLOT, repeat: 1, autoScale: AUTO })
+    const second = await applyFabricPaint(mesh, { ...SLOT, repeat: 1, autoScale: AUTO })
+
+    expect(second?.repeat.x).toBeCloseTo(first?.repeat.x ?? 0)
+  })
+
+  it('leaves the weave alone when the material has no UVs to measure', async () => {
+    const material = new MeshStandardMaterial({ name: 'mat_table_top' })
+    // Density measures 0, which would divide to Infinity. Repeat 1 is the honest answer.
+    const tex = await applyFabricPaint(meshWith(material), { ...SLOT, repeat: 1, autoScale: AUTO })
+
+    expect(tex?.repeat.x).toBe(1)
   })
 })
