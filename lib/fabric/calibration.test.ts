@@ -17,6 +17,7 @@ function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
     heightManual: '',
     modelHeights: { [TABLE_180]: 0.73, [TABLE_240]: 0.85 },
     modelWidths: { [TABLE_180]: 1.8, [TABLE_240]: 2.4 },
+    modelDensities: {},
     slots: [],
     ...overrides,
   }

@@ -336,7 +336,8 @@ export function composeFabricBundle(
             ? sizes.find((z) => matchesSource(z, slot.sizeAttributeId))?.label ?? ''
             : '')
       const swatchCm = parseSwatchCm(sizeLabel)
-      const repeat = tileRepeat({ realCm, modelUnits, texelDensity: slot.texelDensity, swatchCm })
+      const texelDensity = measuredDensityFor(config, model.url, slot)
+      const repeat = tileRepeat({ realCm, modelUnits, texelDensity, swatchCm })
       return {
         materialName: slot.materialName,
         textureUrl,
@@ -344,7 +345,7 @@ export function composeFabricBundle(
         repeat,
         rotationDeg: slot.rotationDeg,
         gloss: detectGloss({ label: swatchLabel, textureUrl }),
-        autoScale: autoScaleFor({ realCm, modelUnits, texelDensity: slot.texelDensity, swatchCm }, config.scaleAxis),
+        autoScale: autoScaleFor({ realCm, modelUnits, texelDensity, swatchCm }, config.scaleAxis),
       }
     })
     .filter((s): s is NonNullable<typeof s> => s !== null)
@@ -413,6 +414,44 @@ export function measuredUnitsFor(
   // needing every configured product opened and saved a second time.
   for (const [key, value] of byUrl) units.set(modelScaleKey(key), value)
   return units.get(modelScaleKey(url)) ?? 0
+}
+
+/**
+ * The texel density to tile this slot's material by ON THIS MODEL: the file's own
+ * measurement where there is one, else the single number measured from the face model
+ * and shared across the product.
+ *
+ * The distinction matters because the shared number is only ever right while every
+ * model on a product is unwrapped the same way, and a real supplier range is not. Two
+ * ways it goes wrong, both of them silent - the finish paints, only its scale is out:
+ *
+ *  - the FILES change and the config does not. A desk range re-unwrapped to a 45cm
+ *    grain target goes on being tiled by the density its pre-unwrap face model had,
+ *    so the grain draws about a third small on every width.
+ *  - the files DISAGREE. Where some of a range were UV-projected and some were not,
+ *    one shared density is a hundredfold out on whichever half it does not describe.
+ *
+ * Zero is a measurement, not a gap: a material whose meshes carry no UVs measures 0
+ * and there is nothing to tile by, which tileRepeat already reads as uncalibrated. So
+ * a present-but-zero entry is returned as it stands rather than falling back to a
+ * shared number that would tile it by some other mesh's answer.
+ *
+ * Keyed by url through modelScaleKey, exactly as the heights are, so an admin's signed
+ * url and the storefront's plain one land on the same entry.
+ */
+export function measuredDensityFor(
+  config: Pick<FabricConfig, 'modelDensities'>,
+  url: string,
+  slot: { materialName: string; texelDensity: number },
+): number {
+  const key = modelScaleKey(url)
+  const byModel =
+    config.modelDensities[key] ??
+    Object.entries(config.modelDensities).find(([k]) => modelScaleKey(k) === key)?.[1]
+  const measured = byModel?.[slot.materialName]
+  return typeof measured === 'number' && Number.isFinite(measured) && measured >= 0
+    ? measured
+    : slot.texelDensity
 }
 
 /**

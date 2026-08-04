@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { autoScaleFor, composeFabricBundle, measuredUnitsFor, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { autoScaleFor, composeFabricBundle, measuredDensityFor, measuredUnitsFor, parseSwatchCm, tileRepeat } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
 import type { SelectedOptionValue, ChildSizeValue } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -56,6 +56,7 @@ function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
     // resolved number directly, so these are here only to satisfy the config shape.
     modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
     modelWidths: { [MODEL_WITH]: 60, [MODEL_NONE]: 45 },
+    modelDensities: {},
     slots: [
       slot(),
       slot({ materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE }),
@@ -230,6 +231,51 @@ describe('measuredUnitsFor', () => {
   })
 })
 
+describe('measuredDensityFor', () => {
+  // The two files of one range, unwrapped differently to each other - which is the
+  // case a single shared density can never describe, and the case that had every
+  // Impulse desk drawing its wood grain about a third small.
+  const NARROW = 'https://cdn.example.com/desk-1200.glb'
+  const WIDE = 'https://cdn.example.com/desk-1600.glb'
+  const SLOT = { materialName: 'Desktop', texelDensity: 1.41 }
+
+  it('tiles each file by its own measurement', () => {
+    const config = { modelDensities: { [NARROW]: { Desktop: 2.2222 }, [WIDE]: { Desktop: 1.0 } } }
+    expect(measuredDensityFor(config, NARROW, SLOT)).toBeCloseTo(2.2222)
+    expect(measuredDensityFor(config, WIDE, SLOT)).toBeCloseTo(1.0)
+  })
+
+  it('falls back to the shared density for a config saved before per-file ones', () => {
+    expect(measuredDensityFor({ modelDensities: {} }, NARROW, SLOT)).toBe(1.41)
+  })
+
+  it('falls back for a model attached since the last measurement', () => {
+    const config = { modelDensities: { [NARROW]: { Desktop: 2.2222 } } }
+    expect(measuredDensityFor(config, WIDE, SLOT)).toBe(1.41)
+  })
+
+  it('falls back for a part this file has no reading for', () => {
+    const config = { modelDensities: { [NARROW]: { 'Desk Edge': 2.16 } } }
+    expect(measuredDensityFor(config, NARROW, SLOT)).toBe(1.41)
+  })
+
+  it('honours a measured zero rather than borrowing another mesh’s number', () => {
+    // 0 is what a material with no UVs measures. There is genuinely nothing to tile
+    // by, and tileRepeat reads it as uncalibrated - whereas falling through to the
+    // shared number would scale this mesh by some other file's unwrap and call it
+    // calibrated, which is the silent wrong answer this whole map exists to stop.
+    const config = { modelDensities: { [NARROW]: { Desktop: 0 } } }
+    expect(measuredDensityFor(config, NARROW, SLOT)).toBe(0)
+  })
+
+  it('reads a measurement saved under the signed url', () => {
+    // Same trap as the heights: the admin panel measures signed urls, the storefront
+    // resolves plain ones.
+    const signed = `${NARROW}?t=1784851200000.sometokenhere`
+    expect(measuredDensityFor({ modelDensities: { [signed]: { Desktop: 2.2222 } } }, NARROW, SLOT)).toBeCloseTo(2.2222)
+  })
+})
+
 describe('composeFabricBundle', () => {
   it('draws the model it is handed', () => {
     const bundle = composeFabricBundle(config(), MODEL_WITH_OBJ, 100, selected(), [])
@@ -280,6 +326,47 @@ describe('composeFabricBundle', () => {
     // Model height-units 80: 160/(80*1*20) = 0.1, not the taller file's 100.
     expect(bundle?.modelId).toBe(MODEL_NONE)
     expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('scales on the shown model’s OWN unwrap, not the face model’s', () => {
+    // The Impulse desk case. Every width of a range shares one slot, so one shared
+    // texelDensity was applied to files unwrapped differently to each other - and to
+    // files re-unwrapped since the face model was last measured. The finish still
+    // painted, so nothing looked broken; the grain merely came out a third small.
+    const bundle = composeFabricBundle(
+      config({
+        // Shared reading says 1, this file measures 2 - the weave should halve.
+        modelDensities: { [MODEL_NONE_OBJ.url]: { 'Fabric seat': 2 } },
+      }),
+      MODEL_NONE_OBJ,
+      80,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, label: '160cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    // 160/(80*2*20) = 0.05, half the 0.1 the shared density of 1 would have given.
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.05)
+    // Calibrated, so the viewer must not go measuring for itself and override it.
+    expect(bundle?.slots[0]?.autoScale).toBeNull()
+  })
+
+  it('asks the viewer to measure a file whose own density is a measured zero', () => {
+    // No UVs on that part in THIS file, whatever the shared number says. Tiling by
+    // another mesh's unwrap would be a confident wrong answer.
+    const bundle = composeFabricBundle(
+      config({ modelDensities: { [MODEL_NONE_OBJ.url]: { 'Fabric seat': 0 } } }),
+      MODEL_NONE_OBJ,
+      80,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, label: '160cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    expect(bundle?.slots[0]?.repeat).toBe(1)
+    expect(bundle?.slots[0]?.autoScale).toEqual({ realCm: 160, scaleAxis: 'height', swatchCm: 20 })
   })
 
   it('leaves a slot at repeat 1 when the child has no size or height value', () => {

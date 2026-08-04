@@ -48,6 +48,11 @@ const FabricSlotSchema = z.object({
   // material's texture is stretched across its geometry. Combined with the model's
   // real height it turns the per-variation swatch size into a true-scale tile
   // repeat - see lib/fabric/resolve.ts. 0 means "not measured yet".
+  //
+  // Measured from ONE model - the face model - and so only right for the others
+  // insofar as they are unwrapped the same way. `modelDensities` below is the
+  // per-file answer and wins wherever it has one; this stays as the fallback for a
+  // config saved before it existed, and for a model that has never been measured.
   texelDensity: z.number().nonnegative().default(0),
 })
 
@@ -99,6 +104,22 @@ export const FabricConfigSchema = z.object({
   // saved before width existed, which is harmless: such a config is on the height axis,
   // and this is only read on the width one.
   modelWidths: z.record(z.string(), z.number()).default({}),
+  // Each attached model's texel density PER MATERIAL, keyed model url first, then
+  // glTF material name. The other half of the tile-repeat sum, and - like the heights
+  // above - a fact about the FILE rather than about the product.
+  //
+  // Why this exists: `slot.texelDensity` is measured from one chosen model and then
+  // applied to every model on the product, which is only ever right while all of them
+  // are unwrapped identically. Real ranges are not. A desk range re-unwrapped to a
+  // 45cm grain target keeps rendering at the density its pre-unwrap face model had;
+  // a chair range where some files were box-projected and some were not can be a
+  // hundredfold out on the ones that were not. Both are silent - the finish paints,
+  // it is merely the wrong size - and neither is visible from anywhere but the mesh.
+  //
+  // Read in preference to `slot.texelDensity`, falling back to it for a config saved
+  // before this, or for a model that has no entry (one attached since the last save).
+  // Nothing here is required: an absent map behaves exactly as it did before.
+  modelDensities: z.record(z.string(), z.record(z.string(), z.number().nonnegative())).default({}),
   slots: z.array(FabricSlotSchema).default([]),
 })
 

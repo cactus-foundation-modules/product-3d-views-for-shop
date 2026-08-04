@@ -30,7 +30,7 @@ import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-
 
 type FabricSlot = FabricConfig['slots'][number]
 
-const EMPTY: FabricConfig = { scaleAxis: 'height', heightAttributeId: '', heightManual: '', modelHeights: {}, modelWidths: {}, slots: [] }
+const EMPTY: FabricConfig = { scaleAxis: 'height', heightAttributeId: '', heightManual: '', modelHeights: {}, modelWidths: {}, modelDensities: {}, slots: [] }
 
 // Words that describe the KIND of thing rather than which part it is, dropped
 // before name-matching so "Fabric seat" pairs with "Seat Colour" on "seat" and not
@@ -80,6 +80,10 @@ type Unreadable = { filename: string; reason: string }
 type Measurement = {
   names: string[]
   densities: Record<string, number>
+  // Per FILE, then per material name - the density each model actually carries, as
+  // opposed to `densities` above, which is the face model's answer applied to the lot.
+  // Keyed by url for the same reason the heights are: the number describes the file.
+  modelDensities: Record<string, Record<string, number>>
   heights: Record<string, number>
   widths: Record<string, number>
   unreadable: Unreadable[]
@@ -95,15 +99,36 @@ async function measureConfigured(
 ): Promise<Measurement> {
   const heights: Record<string, number> = {}
   const widths: Record<string, number> = {}
+  const modelDensities: Record<string, Record<string, number>> = {}
   const unreadable: Unreadable[] = []
-  for (const id of configuredIds) {
+  // Union across every readable model, face model's first so the familiar order is
+  // kept. Taking it from the face model alone hid every part that only some of a
+  // range carries - the widths of one supplier range routinely export their tops
+  // under different material names - leaving those parts unlistable and so unpaintable.
+  const names: string[] = []
+  const addName = (name: string) => { if (!names.includes(name)) names.push(name) }
+
+  // Face model first, so its names lead the list and its densities are the shared
+  // fallback below. It is measured by the same loop as the rest, not separately.
+  const ordered = [
+    ...(faceModel ? [faceModel.id] : []),
+    ...configuredIds.filter((id) => id !== faceModel?.id),
+  ]
+
+  for (const id of ordered) {
     const model = allModels.find((m) => m.id === id)
     if (!model) continue
     let object
     try {
       object = await loadModel(model.url, model.format)
     } catch (error) {
-      unreadable.push({ filename: model.filename, reason: reasonFor(error) })
+      // The face model failing is worse than any other one failing - there are no
+      // material names without it, and the parts list is what the whole panel is for -
+      // but it is still reported rather than thrown, so the message can name the file
+      // instead of leaving the admin to guess which of a product's models it meant.
+      if (!unreadable.some((u) => u.filename === model.filename)) {
+        unreadable.push({ filename: model.filename, reason: reasonFor(error) })
+      }
       continue
     }
     // Keyed by the model's URL, never its p3d_models id: the number describes the
@@ -118,26 +143,31 @@ async function measureConfigured(
     const key = modelScaleKey(model.url)
     heights[key] = await measureModelHeight(object)
     widths[key] = await measureModelWidth(object)
+    // Every model's own density, not just the face model's. The file is open in front
+    // of us for the bounding box anyway, so this costs a walk of the geometry and
+    // settles the one thing a single shared number can never get right: a range whose
+    // files are unwrapped differently to each other, or to whatever the face model
+    // looked like when someone last pressed Save.
+    const perMaterial: Record<string, number> = {}
+    for (const name of collectMaterialNamesFrom(object)) {
+      addName(name)
+      perMaterial[name] = await measureTexelDensity(object, name)
+    }
+    modelDensities[key] = perMaterial
   }
 
+  // The shared per-material fallback, still the face model's answer: it is what a
+  // model with no measurement of its own is tiled by, and what an install running an
+  // older storefront reads. Falls back to the first model that did measure the part,
+  // so an unreadable face model does not blank the lot.
+  const faceKey = faceModel ? modelScaleKey(faceModel.url) : ''
   const densities: Record<string, number> = {}
-  let names: string[] = []
-  if (faceModel) {
-    // The face model failing is worse than any other one failing - there are no
-    // material names without it, and the parts list is what the whole panel is for -
-    // but it is still reported rather than thrown, so the message can name the file
-    // instead of leaving the admin to guess which of a product's models it meant.
-    try {
-      const object = await loadModel(faceModel.url, faceModel.format)
-      names = collectMaterialNamesFrom(object)
-      for (const name of names) densities[name] = await measureTexelDensity(object, name)
-    } catch (error) {
-      if (!unreadable.some((u) => u.filename === faceModel.filename)) {
-        unreadable.push({ filename: faceModel.filename, reason: reasonFor(error) })
-      }
-    }
+  for (const name of names) {
+    const fromFace = modelDensities[faceKey]?.[name]
+    densities[name] = fromFace ?? Object.values(modelDensities).find((m) => m[name] != null)?.[name] ?? 0
   }
-  return { names, densities, heights, widths, unreadable }
+
+  return { names, densities, modelDensities, heights, widths, unreadable }
 }
 
 /** "“a.glb” (404 Not Found)", joined - what the messages below put in front of the admin. */
@@ -258,6 +288,14 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           ...raw,
           modelHeights: onUrls(raw.modelHeights),
           modelWidths: onUrls(raw.modelWidths),
+          // Same treatment, one level deeper: a per-file density map is keyed by the
+          // same urls and goes stale the same way, so a key for a model no longer
+          // attached is dropped rather than carried for ever.
+          modelDensities: Object.fromEntries(
+            Object.entries(raw.modelDensities ?? {})
+              .map(([k, v]) => [modelScaleKey(k), v] as const)
+              .filter(([k]) => attachedUrls.has(k)),
+          ),
         }
         setConfig(saved)
         // Has the saved config a measurement for every model file now attached? A
@@ -351,6 +389,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
       ...c,
       modelHeights: { ...c.modelHeights, ...m.heights },
       modelWidths: { ...c.modelWidths, ...m.widths },
+      modelDensities: { ...c.modelDensities, ...m.modelDensities },
     }))
   }, [])
 
@@ -702,11 +741,22 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           </p>
         )}
         {config.slots.map((slot, i) => {
-          const measured = (densities[slot.materialName] ?? 0) > 0
+          // Every model's reading of this part, which is what the storefront now tiles
+          // by. A part the face model happens not to carry still counts as measured
+          // when another model on the product measured it.
+          const perModel = Object.values(config.modelDensities)
+            .map((m) => m[slot.materialName])
+            .filter((d): d is number => typeof d === 'number')
+          const measured = (densities[slot.materialName] ?? 0) > 0 || perModel.some((d) => d > 0)
           // Read, and came back with nothing to read: the mesh has no texture map.
           // A different sentence from "not measured", because Detect is the answer
           // to one of them and no answer at all to the other.
           const unmeasurable = !measured && measuredNames.has(slot.materialName)
+          // Some of this product's models carry no texture map on this part while
+          // others do, so the finish can only ever draw on some of them. Worth saying
+          // outright: it looks perfect on whichever variation the admin happens to be
+          // previewing and wrong on the rest, which is the hardest kind to notice.
+          const partlyMapped = measured && perModel.some((d) => d <= 0)
           // A part painted a fixed colour has no swatch and so nothing to scale or
           // turn: its size, rotation and "measured" tag are all beside the point and
           // would only invite the admin to fill in numbers that do nothing.
@@ -809,12 +859,14 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   {hex ? 'fixed colour' : 'not a colour - use #rrggbb'}
                 </span>
               ) : (
-                <span className={`p3d-fab-tag ${measured ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
-                  {measured
-                    ? 'texture scale measured'
-                    : unmeasurable
-                      ? 'no texture map in this model'
-                      : 'not measured - use Detect'}
+                <span className={`p3d-fab-tag ${measured && !partlyMapped ? 'p3d-fab-tag-ok' : 'p3d-fab-tag-warn'}`}>
+                  {partlyMapped
+                    ? 'no texture map on some of this product’s models'
+                    : measured
+                      ? 'texture scale measured'
+                      : unmeasurable
+                        ? 'no texture map in this model'
+                        : 'not measured - use Detect'}
                 </span>
               )}
               <span className="p3d-fab-spacer" />
