@@ -984,10 +984,28 @@ export function collectMaterialNamesFrom(model: Object3D): string[] {
  * mesh at config time: paired with the product's real height (a per-variation
  * attribute value) it fixes the model's real-world scale, which the file itself
  * does not reliably state - the same mm-vs-metres ambiguity frameModel works around.
+ *
+ * PRECISE - that second argument to setFromObject - and it has to be. Box3's default
+ * is the cheap form: it takes the eight CORNERS of each mesh's own bounding box and
+ * transforms those, which is exact only while every node's rotation is a multiple of
+ * 90 degrees. Rotate a part off-axis and the axis-aligned box drawn round those
+ * corners is legitimately larger than the geometry inside it - up to 30%, and three
+ * supplier desks in this catalogue were out by 28%.
+ *
+ * Nothing showed it, because the inflation cancels itself everywhere except the one
+ * place it matters. Fabric tiling divides the product's real size by THIS number, so
+ * an oversized measurement and an oversized divisor agree and the weave stays
+ * perfect. AR does not: it scales the model's live box to the real height, so an
+ * inflated box renders the product SHORT by exactly the excess - a desk placed in
+ * someone's room at 64cm instead of 82cm, with every other check green.
+ *
+ * The cost is a walk of the vertices instead of eight points. That is paid at config
+ * time (an admin pressing Detect) and once per model on the autoScale fallback, where
+ * the answer is cached on the clone - never per frame.
  */
 export async function measureModelHeight(model: Object3D): Promise<number> {
   const { Box3, Vector3 } = await import('three')
-  return new Box3().setFromObject(model).getSize(new Vector3()).y
+  return new Box3().setFromObject(model, true).getSize(new Vector3()).y
 }
 
 /**
@@ -1002,10 +1020,12 @@ export async function measureModelHeight(model: Object3D): Promise<number> {
  * exported, and quietly taking whichever of X and Z happened to be larger would scale
  * a deep, narrow cabinet by its depth without ever saying so. A file exported lying on
  * its side is a file to re-export, not a case to guess at.
+ *
+ * Precise for the same reason as measureModelHeight - see the note there.
  */
 export async function measureModelWidth(model: Object3D): Promise<number> {
   const { Box3, Vector3 } = await import('three')
-  return new Box3().setFromObject(model).getSize(new Vector3()).x
+  return new Box3().setFromObject(model, true).getSize(new Vector3()).x
 }
 
 /**

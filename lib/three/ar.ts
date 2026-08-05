@@ -145,15 +145,24 @@ export async function bakeUsdzUrl(model: Object3D, sizing: ArSizing): Promise<st
   // Measure the model at scale 1 (longest side ~2 after frameModel) and turn the
   // real-world size into a uniform factor - the product's true height/width when
   // the configurator knows it, the owner's longest-side guess otherwise.
+  //
+  // PRECISE, and this is the measurement that made it necessary. Box3's cheap form
+  // transforms the eight corners of each mesh's own box, which overstates the extent
+  // of any part rotated off-axis - and holderScaleFor divides the real height BY this
+  // number, so an overstated box shrinks the product by exactly the overstatement.
+  // Three desks in this catalogue were landing in the shopper's room 22% short with
+  // nothing anywhere reporting a fault. See measureModelHeight in load-model.
   scene.updateMatrixWorld(true)
-  const size = new Box3().setFromObject(holder).getSize(new Vector3())
+  const size = new Box3().setFromObject(holder, true).getSize(new Vector3())
   holder.scale.setScalar(holderScaleFor(size, sizing))
 
   // Sit the model's base on the ground plane rather than its centre, so it lands
   // on the floor the way the real object would. Measured after scaling, off the
   // holder's world box, then pushed up by however far its base sits below zero.
+  // Precise again, or the lift is taken from a floor the model does not reach and it
+  // hovers by the difference.
   scene.updateMatrixWorld(true)
-  const box = new Box3().setFromObject(holder)
+  const box = new Box3().setFromObject(holder, true)
   holder.position.y = -box.min.y
   scene.updateMatrixWorld(true)
 
@@ -264,7 +273,11 @@ export async function startWebXrAr(
   // sits at the holder's origin - place the holder on the floor and the model stands
   // on it. The lift is in the model's own framed units and survives any later resize,
   // which scales the whole holder, origin included.
-  const localBox = new Box3().setFromObject(model)
+  //
+  // Precise, exactly as in bakeUsdzUrl above: the WebXR path sizes the product from
+  // this box too, so the cheap corner form shrinks an off-axis model here in the same
+  // way and by the same amount.
+  const localBox = new Box3().setFromObject(model, true)
   const baseScale = holderScaleFor(localBox.getSize(new Vector3()), opts)
   model.position.y -= localBox.min.y
   holder.scale.setScalar(baseScale)
