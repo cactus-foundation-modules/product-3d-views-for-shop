@@ -15,6 +15,13 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 //    own image only appears once that variant is picked). Splashing every
 //    variation's model up front is misleading: a shopper who has picked nothing is
 //    looking at oak, walnut and ash at once with no idea which they will get.
+//  - Except for the handful the shop's owner has explicitly promoted, which
+//    arrive as `featuredProductIds` and show behind the product's own while
+//    nothing is chosen. That is a decision someone made about this range - "the
+//    oak one is the one worth showing" - rather than the module guessing, which
+//    is the difference between it and the case above. The host empties the list
+//    the moment the shopper picks anything, so it is only ever the opening view;
+//    a chosen variation still wins outright, below.
 //  - Once a variation carrying its own model is chosen, that model replaces the
 //    product's own rather than sitting beside it. The chosen model is the exact
 //    thing being bought; the generic one is then a second, near-identical
@@ -29,7 +36,7 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 //    and the honest reading of two identical thumbnails is that something is
 //    broken. Deduplication is by url, since that is what identity means for a
 //    file that was uploaded once and pointed at twice.
-export function visibleItems(payload: P3dPayload, activeProductId: string | null): P3dItem[] {
+export function visibleItems(payload: P3dPayload, activeProductId: string | null, featuredProductIds: string[] = []): P3dItem[] {
   const own = payload.items.filter((i) => i.productId === payload.parentProductId)
   const variation = payload.items.filter((i) => i.productId !== payload.parentProductId)
 
@@ -39,7 +46,19 @@ export function visibleItems(payload: P3dPayload, activeProductId: string | null
 
   if (relevant.length > 0) return dedupeByUrl(relevant)
 
-  return dedupeByUrl(own)
+  // Promoted variations only count while nothing is chosen. A shopper who has
+  // settled on walnut and whose choice carries no model of its own is shown the
+  // product's generic one, not the oak one somebody promoted - the promotion was
+  // about the opening view, and answering their choice with a rival finish is the
+  // exact confusion this whole rule exists to avoid.
+  if (activeProductId !== null) return dedupeByUrl(own)
+
+  const featured = featuredProductIds.flatMap((id) => variation.filter((i) => i.productId === id))
+  // The product's own first, so a page that has both opens on the model that
+  // describes the product rather than on one of the finishes. Deduplicated across
+  // the two together: a promoted variation pointing at the same file as the
+  // parent is one thumbnail, not two.
+  return dedupeByUrl([...own, ...featured])
 }
 
 // First occurrence wins, so the strip keeps the order the models were attached in

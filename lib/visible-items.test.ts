@@ -92,4 +92,64 @@ describe('visibleItems', () => {
     const p = payload([item('own', PARENT, '/chair.glb'), item('oak', OAK, '/chair.glb')])
     expect(keys(visibleItems(p, OAK))).toEqual(['oak'])
   })
+
+  // ---- Promoted variations ------------------------------------------------
+  // The owner has ticked "show up front" against a variation, so its model joins
+  // the opening view instead of waiting to be chosen.
+  describe('promoted variations', () => {
+    it('shows a promoted variation model while nothing is chosen', () => {
+      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
+      expect(keys(visibleItems(p, null, [OAK]))).toEqual(['oak'])
+    })
+
+    it("puts the product's own model first and the promoted ones behind it", () => {
+      const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
+      expect(keys(visibleItems(p, null, [OAK]))).toEqual(['own', 'oak'])
+    })
+
+    it('promotes several variations in the order it is given them', () => {
+      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
+      expect(keys(visibleItems(p, null, [WALNUT, OAK]))).toEqual(['walnut', 'oak'])
+    })
+
+    it('leaves an unpromoted variation hidden', () => {
+      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
+      expect(keys(visibleItems(p, null, [OAK]))).toEqual(['oak'])
+    })
+
+    // The rule the whole feature turns on: promotion is about the opening view,
+    // so a chosen variation takes the strip over exactly as it always did.
+    it('drops a promoted variation once another variation is chosen', () => {
+      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
+      expect(keys(visibleItems(p, WALNUT, [OAK]))).toEqual(['walnut'])
+    })
+
+    // And it must not sneak back in through the "chosen variation has no model"
+    // fallback: that shows the product's own, never a rival finish.
+    it("keeps a promoted variation out when the chosen one has no model", () => {
+      const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
+      expect(keys(visibleItems(p, WALNUT, [OAK]))).toEqual(['own'])
+    })
+
+    it('shows one thumbnail when a promoted variation reuses the product own file', () => {
+      const p = payload([item('own', PARENT, '/chair.glb'), item('oak', OAK, '/chair.glb')])
+      expect(keys(visibleItems(p, null, [OAK]))).toEqual(['own'])
+    })
+
+    it('collapses two promoted variations sharing one file', () => {
+      const p = payload([item('oak', OAK, '/wood.glb'), item('walnut', WALNUT, '/wood.glb')])
+      expect(keys(visibleItems(p, null, [OAK, WALNUT]))).toEqual(['oak'])
+    })
+
+    it('ignores a promoted id with no model attached', () => {
+      const p = payload([item('own', PARENT, '/own.glb')])
+      expect(keys(visibleItems(p, null, [OAK]))).toEqual(['own'])
+    })
+
+    // A gallery written before this shipped passes nothing at all.
+    it('behaves exactly as before when given no promoted ids', () => {
+      const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
+      expect(keys(visibleItems(p, null))).toEqual(['own'])
+    })
+  })
 })

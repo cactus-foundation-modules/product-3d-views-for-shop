@@ -107,7 +107,7 @@ function Thumb3d({ item, settings, fabric, active, thumbClass, thumbOnClass, onP
   )
 }
 
-export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
+export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
   const data = payload as P3dPayload
 
   // Hold the last variation the shopper fully settled on. Mid-change - they've
@@ -122,7 +122,11 @@ export function Gallery3dThumbs({ payload, activeProductId, activeKey, onPick, t
   if (activeProductId !== null && activeProductId !== lastResolved) setLastResolved(activeProductId)
   const effectiveProductId = activeProductId ?? lastResolved
 
-  const items = visibleItems(data, effectiveProductId)
+  // The variations the shop's owner promoted onto this product's gallery are the
+  // opening view's business only, and the host has already emptied the list by
+  // the time a choice is in hand - but `effectiveProductId` is passed rather than
+  // `activeProductId` so a mid-reconfigure gap cannot let them back in either.
+  const items = visibleItems(data, effectiveProductId, featuredProductIds)
 
   // The shopper had a model on the stage and then changed variation to one that
   // does not offer it. Hand the stage back rather than leaving it showing a model
