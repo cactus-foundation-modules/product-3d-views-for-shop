@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { getModelsForProductTree } from '@/modules/product-3d-views-for-shop/lib/db/models'
-import { MANUAL_SIZE_ID, attributeColourId, optionSizeId, parseHexColour, readColourSource, readSizeSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_SIZE_ID, attributeColourId, optionSizeId, parseHexColour, parseSwatchCm, readColourSource, readSizeSource } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
 import { detectGloss } from '@/modules/product-3d-views-for-shop/lib/fabric/finish'
 import type { FabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
@@ -130,36 +130,11 @@ async function hasOptionSources(): Promise<boolean> {
   return value
 }
 
-/**
- * The real-world centimetres a size label describes: "20x20cm" -> 20, "137cm" ->
- * 137, "1070mm" -> 107. Takes the first number in the label, so it reads both a
- * square swatch size and an overall-height value; a non-square "10x20" reads as 10
- * (out of scope in v1).
- *
- * The UNIT written after that number is honoured, because an admin enters heights
- * and swatch sizes in whichever they have to hand: a value tagged `mm` is a tenth
- * of the same number in cm, and `m` is a hundred times. A bare number carries no
- * unit and is read as centimetres, which is what the configurator has always
- * assumed. Getting this wrong is a factor-of-ten scale error - a chair entered as
- * "1070mm" would weave ten times too coarse if its mm were treated as cm.
- *
- * Returns null when the label carries no number at all, which the caller treats as
- * "uncalibrated".
- */
-export function parseSwatchCm(label: string): number | null {
-  // The value is the first number; the unit is read separately as the one that
-  // trails a digit anywhere in the label, so "20x20mm" (unit on the second number)
-  // still scales as millimetres, while prose that merely contains an "m" - a size
-  // named "Medium" - is not mistaken for a metre value. A unit must follow a digit
-  // to count.
-  const number = label.match(/\d+(?:\.\d+)?/)
-  if (!number) return null
-  const value = Number.parseFloat(number[0])
-  if (!Number.isFinite(value) || value <= 0) return null
-  const unit = label.match(/\d\s*(mm|cm|m)\b/i)?.[1]?.toLowerCase()
-  const cm = unit === 'mm' ? value / 10 : unit === 'm' ? value * 100 : value
-  return cm > 0 ? cm : null
-}
+// The size-label reader lives in the leaf constants file, so the admin panel - a
+// client component - can read a typed size the same way the storefront does without
+// dragging Prisma into the browser bundle. Re-exported here because this is where it
+// was, and every caller and its tests already know that name.
+export { parseSwatchCm }
 
 // An http(s) url is the only thing worth painting: a swatch that is empty, or a
 // bare colour token rather than a texture file, would give the loader nothing to
@@ -266,7 +241,16 @@ export function composeFabricBundle(
         : sizeSource.kind === 'option'
           ? selected.find((s) => s.optionId === sizeSource.id)?.label ?? undefined
           : undefined
-  const realCm = sizeLabelForScale ? parseSwatchCm(sizeLabelForScale) : null
+  // A file may declare its own real size, and where it does it wins outright. The
+  // product-level measurement above describes the PRODUCT; a model tagged to an
+  // add-on combination shows the product with something else beside it and is a
+  // different size for that reason, while its measured half - `modelUnits` - is taken
+  // off that same combined box. Scaling the two against each other is the whole
+  // calibration, so the two halves have to be measuring the same object.
+  //
+  // Absent for nearly every file, which reads exactly as it did before.
+  const declaredCm = parseSwatchCm(config.modelSizes?.[modelScaleKey(model.url)] ?? '')
+  const realCm = declaredCm ?? (sizeLabelForScale ? parseSwatchCm(sizeLabelForScale) : null)
 
   const slots = config.slots
     .map((slot) => {

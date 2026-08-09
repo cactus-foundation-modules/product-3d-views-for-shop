@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { collectMaterialNamesFrom, loadModel, measureModelHeight, measureModelWidth, measureTexelDensity } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
+import { MANUAL_COLOUR_ID, MANUAL_SIZE_ID, parseHexColour, parseSwatchCm } from '@/modules/product-3d-views-for-shop/lib/fabric/constants'
 import { isCalibrated, modelScaleKey } from '@/modules/product-3d-views-for-shop/lib/fabric/calibration'
 import { detectGloss } from '@/modules/product-3d-views-for-shop/lib/fabric/finish'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
@@ -30,7 +30,7 @@ import type { FabricColourOption, FabricSizeAttribute } from '@/modules/product-
 
 type FabricSlot = FabricConfig['slots'][number]
 
-const EMPTY: FabricConfig = { scaleAxis: 'height', heightAttributeId: '', heightManual: '', modelHeights: {}, modelWidths: {}, modelDensities: {}, slots: [] }
+const EMPTY: FabricConfig = { scaleAxis: 'height', heightAttributeId: '', heightManual: '', modelHeights: {}, modelWidths: {}, modelDensities: {}, modelSizes: {}, slots: [] }
 
 // Words that describe the KIND of thing rather than which part it is, dropped
 // before name-matching so "Fabric seat" pairs with "Seat Colour" on "seat" and not
@@ -293,6 +293,14 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           // attached is dropped rather than carried for ever.
           modelDensities: Object.fromEntries(
             Object.entries(raw.modelDensities ?? {})
+              .map(([k, v]) => [modelScaleKey(k), v] as const)
+              .filter(([k]) => attachedUrls.has(k)),
+          ),
+          // A hand-typed per-file size is keyed by url like the measurements, and
+          // goes stale the same way, so it gets the same treatment: normalised, and
+          // dropped for a file no longer attached rather than carried for ever.
+          modelSizes: Object.fromEntries(
+            Object.entries(raw.modelSizes ?? {})
               .map(([k, v]) => [modelScaleKey(k), v] as const)
               .filter(([k]) => attachedUrls.has(k)),
           ),
@@ -633,6 +641,14 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const materialOptions = (current: string): string[] =>
     materialNames.includes(current) || !current ? materialNames : [current, ...materialNames]
 
+  // The files whose real size is not the product's own: the ones tagged to an add-on
+  // combination, which show the product WITH something else and measure taller (or
+  // wider) for it. Plus any file that already carries a typed size, tagged or not, so
+  // a value someone has set can never go invisible and therefore un-editable.
+  const sizedModels = distinctModels.filter(
+    (m) => (m.context ?? '') !== '' || (config.modelSizes[modelScaleKey(m.url)] ?? '') !== '',
+  )
+
   return (
     <div className="p3d-fab">
       <style dangerouslySetInnerHTML={{ __html: css }} />
@@ -722,6 +738,85 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           </p>
         </div>
       </div>
+
+      {/* Add-on combination sizes: the per-file exception to the one size above.
+          Only shown once the product has a model tagged to an add-on combination,
+          since that is the only thing that makes a file a different size from the
+          product it belongs to. */}
+      {sizedModels.length > 0 && (
+        <div className="p3d-fab-sec">
+          <p className="p3d-fab-sub">Sizes with add-ons in shot</p>
+          <p className="p3d-fab-help">
+            A model tagged to an add-on combination shows this product with something else on it, so it is taller
+            (or wider) than the product on its own - a desk 86.5cm high measures about 130cm to the top of its
+            screen. Give each of those files its own real {config.scaleAxis === 'width' ? 'width' : 'height'} here,
+            measured the same way you measured the one above: to the very top{config.scaleAxis === 'width' ? '' : ''} of
+            everything the file shows, add-on included. Leave a box empty and the file falls back to the
+            product&rsquo;s own size, which will draw every finish on it - the desk&rsquo;s wood as well as the
+            add-on&rsquo;s fabric - at the wrong scale.
+          </p>
+          {sizedModels.map((model) => {
+            const key = modelScaleKey(model.url)
+            const measured = (config.scaleAxis === 'width' ? config.modelWidths : config.modelHeights)[key] ?? 0
+            const typed = config.modelSizes[key] ?? ''
+            const declaredCm = parseSwatchCm(typed)
+            // Typed something that is not a size, or typed nothing at all on a file
+            // that is tagged: either way this file is about to be scaled by a
+            // measurement of a different object. Said out loud, because the fault it
+            // causes is invisible - every finish paints perfectly, at the wrong size.
+            const unsized = declaredCm === null
+            return (
+              <div className="p3d-fab-row" key={model.id}>
+                <div className="p3d-fab-field" style={{ flex: 1, minWidth: '12rem' }}>
+                  <label className="p3d-fab-label" htmlFor={`p3d-size-${model.id}`}>
+                    {model.filename}
+                  </label>
+                  <span className="p3d-fab-tag p3d-fab-tag-ok" style={{ justifySelf: 'start' }}>
+                    shows this product with {model.context || 'no add-on tagged'}
+                  </span>
+                </div>
+                <div className="p3d-fab-field">
+                  <label className="p3d-fab-label">{axisLabel} with the add-on</label>
+                  <input
+                    id={`p3d-size-${model.id}`}
+                    type="text"
+                    className="p3d-fab-select p3d-fab-num"
+                    value={typed}
+                    placeholder={config.scaleAxis === 'width' ? 'e.g. 210cm' : 'e.g. 130cm'}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setConfig((c) => {
+                        const next = { ...c.modelSizes }
+                        // An emptied box removes the entry rather than storing "",
+                        // so the fallback is the product's own size and not a size
+                        // that will not parse.
+                        if (value.trim()) next[key] = value
+                        else delete next[key]
+                        return { ...c, modelSizes: next }
+                      })
+                    }}
+                  />
+                </div>
+                {unsized ? (
+                  <span className="p3d-fab-tag p3d-fab-tag-warn" style={{ alignSelf: 'flex-end', marginBottom: '.5rem' }}>
+                    {typed ? 'that is not a measurement' : 'no size - finishes on this file will be the wrong scale'}
+                  </span>
+                ) : (
+                  // What the file measures in its own units against what has been
+                  // typed. A size out by a factor of ten shows up here as a
+                  // cm-per-unit that does not match the rest of the product, which is
+                  // the only place that mistake is catchable before the shop sees it.
+                  measured > 0 && (
+                    <span className="p3d-fab-help" style={{ alignSelf: 'flex-end', paddingBottom: '.5rem' }}>
+                      file measures {measured.toFixed(3)} units - {(declaredCm / measured).toFixed(1)}cm per unit
+                    </span>
+                  )
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* Material parts: named material slots, painted from a colour option. */}
       <div className="p3d-fab-sec">

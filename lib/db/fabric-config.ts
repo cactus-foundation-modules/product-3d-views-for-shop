@@ -120,6 +120,26 @@ export const FabricConfigSchema = z.object({
   // before this, or for a model that has no entry (one attached since the last save).
   // Nothing here is required: an absent map behaves exactly as it did before.
   modelDensities: z.record(z.string(), z.record(z.string(), z.number().nonnegative())).default({}),
+  // A hand-typed REAL size along `scaleAxis` for ONE file, keyed by model url, used
+  // in place of the product-level size above wherever there is one.
+  //
+  // Why a per-file real size exists at all: the product-level size describes the
+  // PRODUCT, and an add-on-context model (p3d_models.context) is not the product - it
+  // is the product with something else in shot, and it is a different size because of
+  // it. A desk 86.5cm tall with a screen on it measures 130cm to the top of the
+  // screen. Since the calibration is real size over MEASURED size and the measured
+  // half is taken off that same combined bounding box, saying "86.5cm" about the
+  // combined file quietly re-scales every finish on it - the desktop grain included -
+  // by the ratio of the two. Which is the sort of fault nobody sees, because the
+  // colours all still paint and only the weave comes out the wrong size.
+  //
+  // Empty for the overwhelming majority. A file with no entry reads exactly as it
+  // always did, so nothing saved before this changes behaviour.
+  //
+  // Stored as typed ("130cm"), parsed at read time by the same reader as every other
+  // size on this screen, so a value that will not parse leaves the file on the
+  // product-level size rather than on some guess.
+  modelSizes: z.record(z.string(), z.string()).default({}),
   slots: z.array(FabricSlotSchema).default([]),
 })
 

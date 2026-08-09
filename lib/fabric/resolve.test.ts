@@ -57,6 +57,7 @@ function config(overrides: Partial<FabricConfig> = {}): FabricConfig {
     modelHeights: { [MODEL_WITH]: 100, [MODEL_NONE]: 80 },
     modelWidths: { [MODEL_WITH]: 60, [MODEL_NONE]: 45 },
     modelDensities: {},
+    modelSizes: {},
     slots: [
       slot(),
       slot({ materialName: 'Fabric back', colourOptionId: OPT_BACK_COLOUR, sizeAttributeId: ATTR_BACK_SIZE }),
@@ -310,6 +311,59 @@ describe('composeFabricBundle', () => {
     expect(slots[0]?.repeat).toBeCloseTo(0.1)
     expect(slots[1]).toMatchObject({ materialName: 'Fabric back', textureUrl: TEAL_URL })
     expect(slots[1]?.repeat).toBeCloseTo(0.2)
+  })
+
+  // An add-on-context file shows the product WITH something else on it, so it is a
+  // different size from the product - and since the measured half of the calibration
+  // comes off that same combined box, the real half has to as well. Without this the
+  // whole file, the product's own parts included, tiles by the ratio of the two.
+  it('scales a file that declares its own real size by that size', () => {
+    const withScreens = { ...MODEL_WITH_OBJ, url: 'https://cdn.example.com/chiro-with-screens.glb' }
+    const bundle = composeFabricBundle(
+      // The product is 200cm; this file measures 300 units because of what is on it,
+      // and says so.
+      config({ modelSizes: { [withScreens.url]: '600cm' } }),
+      withScreens,
+      300,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    // 600/(300*1*20) = 0.1 - the same 2cm per model unit the base file scales at,
+    // which is the whole point. The product-level 200cm would have given 0.033.
+    expect(bundle?.realCm).toBe(600)
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('ignores a declared size that is not a size, rather than guessing at one', () => {
+    const bundle = composeFabricBundle(
+      config({ modelSizes: { [MODEL_WITH_OBJ.url]: 'as exported' } }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    expect(bundle?.realCm).toBe(200)
+    expect(bundle?.slots[0]?.repeat).toBeCloseTo(0.1)
+  })
+
+  it('leaves a file with no declared size on the product-level size', () => {
+    const bundle = composeFabricBundle(
+      config({ modelSizes: { 'https://cdn.example.com/some-other.glb': '600cm' } }),
+      MODEL_WITH_OBJ,
+      100,
+      selected({ optionId: OPT_SEAT_COLOUR, valueId: VAL_CRAB, swatch: CRAB_URL }),
+      [
+        { attributeId: ATTR_HEIGHT, label: '200cm' },
+        { attributeId: ATTR_SEAT_SIZE, label: '20x20cm' },
+      ],
+    )
+    expect(bundle?.realCm).toBe(200)
   })
 
   it('scales on the shown model height, so each variation calibrates on its own file', () => {
