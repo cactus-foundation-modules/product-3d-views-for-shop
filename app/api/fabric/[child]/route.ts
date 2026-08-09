@@ -35,7 +35,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const config = await getFabricConfig(parent)
     if (!config) return json(null)
 
-    const bundle = await resolveFabricForChild(child, parent, config)
+    // Add-on context, both optional: which combination's model to draw, and the
+    // companion option values painting its extra parts. Value ids are opaque
+    // and resolved against svr's own tables, so a junk id simply matches
+    // nothing - same trust level as the child id above. Capped so a hand-built
+    // url cannot turn one resolve into a thousand-value scan.
+    const context = query.get('context') ?? ''
+    const extraValueIds = (query.get('extra') ?? '').split(',').filter(Boolean).slice(0, 40)
+
+    const bundle = await resolveFabricForChild(child, parent, config, { context, extraValueIds })
     return json(bundle)
   } catch (error) {
     console.error('[product-3d-views] fabric resolve failed:', error)

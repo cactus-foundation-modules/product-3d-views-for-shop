@@ -26,7 +26,9 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
   // which have no 3D model at all. Shop then renders exactly as it did before,
   // and the shopper's browser is never asked to load a viewer it has no use for.
   async load(productId: string): Promise<P3dPayload | null> {
-    const models = await getModelsForProductTree(productId)
+    // Tagged rows included: the strip filters them out client-side, and the
+    // stage is what swaps to them when the page announces a combination.
+    const models = await getModelsForProductTree(productId, { includeContexts: true })
     if (models.length === 0) return null
     // Read only once we know there is a model to draw, and the settings are cached,
     // so a product page with no model never touches either table at all.
@@ -60,6 +62,9 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
         url: signAssetUrl(m.url),
         format: m.format,
         label: `${formatLabel(m.format)} model`,
+        // Add-on-combination files ride along for the stage to swap to; the
+        // thumbnail strip itself offers base models only (see Gallery3dThumbs).
+        context: m.context,
       })),
     }
   },

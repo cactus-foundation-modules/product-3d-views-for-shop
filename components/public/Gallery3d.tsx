@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
+import { useModelContext } from '@/modules/product-3d-views-for-shop/lib/use-model-context'
 import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { preloadProductAssets } from '@/modules/product-3d-views-for-shop/lib/preload'
 import { mountThumb } from '@/modules/product-3d-views-for-shop/lib/three/thumb-stage'
@@ -108,7 +109,13 @@ function Thumb3d({ item, settings, fabric, active, thumbClass, thumbOnClass, onP
 }
 
 export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
-  const data = payload as P3dPayload
+  const raw = payload as P3dPayload
+  // The strip offers BASE models only. Add-on-combination files (a tagged
+  // context) exist for the stage to swap to when the page announces that
+  // combination - a thumbnail each would fill the strip with near-identical
+  // desks the shopper never asked to compare. This also keeps the idle preload
+  // below to the files a plain visit can actually show.
+  const data: P3dPayload = { ...raw, items: raw.items.filter((i) => !(i.context ?? '')) }
 
   // Hold the last variation the shopper fully settled on. Mid-change - they've
   // switched one option and not yet repicked the others - shop hands us a null
@@ -291,7 +298,15 @@ function PaintedThumb3d({ payload, item, active, thumbClass, thumbOnClass, onPic
 // This component is NOT remounted on a variation change (see the call site) - it
 // persists, so the WebGL context and the model on it survive a colour pick and only
 // the painted texture changes. That is what makes a colour change cheap.
-function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem }) {
+function PaintedStage({ payload, item, context, extraValueIds }: {
+  payload: P3dPayload
+  item: P3dItem
+  // The add-on combination in force: picks the context-tagged file server-side
+  // and carries the companion values that paint its extra parts. Both default
+  // to none, which is exactly the original request.
+  context?: string
+  extraValueIds?: string[]
+}) {
   // The resolved slots, or null before the first fetch lands - rendered unpainted until
   // then. On a LATER colour change the previous colours deliberately stay on screen
   // while the new bundle is in flight: the model is already correct and only its fabric
@@ -309,8 +324,12 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
   // and without this the first (server) half of that wait showed nothing at all. A
   // cached bundle resolves on the spot, and the overlay's own appearance delay keeps
   // that instant round-trip invisible.
+  // Tagged with the variation AND the add-on combination it resolved for, so a
+  // context or companion-colour change re-fetches exactly like a colour pick.
+  const extraKey = (extraValueIds ?? []).join(',')
+  const fetchTag = `${item.productId}|${context ?? ''}|${extraKey}`
   const [resolved, setResolved] = useState<{
-    productId: string
+    tag: string
     slots: FabricBundle['slots']
     realCm: number | null
     scaleAxis: 'height' | 'width'
@@ -318,25 +337,28 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
 
   useEffect(() => {
     let cancelled = false
-    fetchBundle(payload.parentProductId, item.productId)
+    fetchBundle(payload.parentProductId, item.productId, { context, extraValueIds })
       .then((bundle) => {
         // A variation the resolver could not place (missing config, absent companion
         // tables) resolves to no paints, and the model stays on the stage unpainted
         // rather than vanishing.
         if (!cancelled) setResolved({
-          productId: item.productId,
+          tag: fetchTag,
           slots: bundle?.slots ?? [],
           realCm: bundle?.realCm ?? null,
           scaleAxis: bundle?.scaleAxis ?? 'height',
         })
       })
-      .catch(() => { if (!cancelled) setResolved({ productId: item.productId, slots: [], realCm: null, scaleAxis: 'height' }) })
+      .catch(() => { if (!cancelled) setResolved({ tag: fetchTag, slots: [], realCm: null, scaleAxis: 'height' }) })
     return () => { cancelled = true }
-    // payload.parentProductId is page-static; the variation whose model this is drives
-    // the fetch, and a cached bundle resolves on the spot.
-  }, [payload.parentProductId, item.productId])
+    // payload.parentProductId is page-static; the variation whose model this is,
+    // the context and the companion values drive the fetch, and a cached bundle
+    // resolves on the spot. extraValueIds is watched through its joined string
+    // so a fresh-but-equal array does not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload.parentProductId, fetchTag])
 
-  const pending = resolved?.productId !== item.productId
+  const pending = resolved?.tag !== fetchTag
   return (
     <Viewer3d
       item={item}
@@ -350,11 +372,24 @@ function PaintedStage({ payload, item }: { payload: P3dPayload; item: P3dItem })
 export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps) {
   const data = payload as P3dPayload
 
+  // The add-on combination the page has announced (empty until an accessories
+  // box - or whatever else speaks the contract - says otherwise). Subscribed
+  // unconditionally: hooks may not sit behind the early return below.
+  const { signature, extraValueIds } = useModelContext(data.parentProductId)
+
   // Looked up across every item rather than the visible ones: the strip decides
   // what may be picked, and re-deciding it here would only add a second opinion
   // about which model is on the stage.
-  const item = data.items.find((i) => i.key === itemKey) ?? null
-  if (!item) return null
+  const picked = data.items.find((i) => i.key === itemKey) ?? null
+  if (!picked) return null
+
+  // Exact-or-base: the picked product's file for the active combination when
+  // one exists, else the picked (base) file untouched. The strip only ever
+  // offers base items, so `picked.context` is '' here and the swap is always
+  // base -> tagged, never sideways.
+  const item = signature
+    ? data.items.find((i) => i.productId === picked.productId && (i.context ?? '') === signature) ?? picked
+    : picked
 
   // Every model on a product configured for fabric is painted live, the product's
   // own generic view included. A model on a product with no fabric config shows as
@@ -383,9 +418,9 @@ export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps)
         // of the seconds a shopper waited on each option change, and it made Viewer3d's
         // whole repaint-in-place path unreachable for the exact case it was written
         // for. Unkeyed, the viewer persists: Viewer3d rebuilds only when item.url
-        // genuinely changes (a headrest-style model swap), and a plain colour change
-        // repaints in place.
-        ? <PaintedStage payload={data} item={item} />
+        // genuinely changes (a headrest-style model swap - or a context swapping the
+        // base file for a combined one), and a plain colour change repaints in place.
+        ? <PaintedStage payload={data} item={item} context={signature} extraValueIds={extraValueIds} />
         : <Viewer3d item={item} settings={data.settings} />}
     </>
   )

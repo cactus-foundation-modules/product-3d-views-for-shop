@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS "p3d_models" (
     "format" TEXT NOT NULL,
     "size" INTEGER NOT NULL DEFAULT 0,
     "position" INTEGER NOT NULL DEFAULT 0,
+    -- Which add-on combination this file shows. '' is the base model (the
+    -- product alone); see 006_model_context.sql for the matching rules.
+    "context" TEXT NOT NULL DEFAULT '',
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "p3d_models_pkey" PRIMARY KEY ("id"),

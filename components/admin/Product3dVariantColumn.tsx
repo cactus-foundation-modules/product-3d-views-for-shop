@@ -26,6 +26,7 @@ import { ModelUploadCancelled, uploadModel } from '@/modules/product-3d-views-fo
 import { reloadProductModels, useProductModels } from '@/modules/product-3d-views-for-shop/lib/use-product-models'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
 import { Model3dPreviewModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPreviewModal'
+import { ModelContextTag } from '@/modules/product-3d-views-for-shop/components/admin/ModelContextTag'
 import { useModelClashPrompt } from '@/modules/product-3d-views-for-shop/components/admin/useModelClashPrompt'
 import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
 
@@ -125,6 +126,11 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
             >
               {formatLabel(m.format)}
             </button>
+            {/* Which add-on combination the file shows - untagged is the base
+                model. Beside the badge because a combined desk-with-screens
+                file lives on the same variation row as the plain desk, and the
+                tag is the only thing telling the two apart. */}
+            <ModelContextTag model={m} onSaved={() => void reloadProductModels(productId)} />
             <button
               type="button"
               onClick={() => void remove(m.id)}

@@ -19,6 +19,7 @@ import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { P3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
 import type { FabricBundle, P3dAdminModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/components/admin/Model3dPickerModal'
+import { ModelContextTag } from '@/modules/product-3d-views-for-shop/components/admin/ModelContextTag'
 import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
 
@@ -191,6 +192,7 @@ export function Product3dEditor({ productId }: { productId: string }) {
             {models.map((m) => (
               <div key={m.id} className="p3d-ed-row">
                 <span className="p3d-ed-name">{m.filename}</span>
+                <ModelContextTag model={m} onSaved={() => void refresh()} />
                 <span className="p3d-ed-meta">{formatLabel(m.format)} · {fmtSize(m.size)}</span>
                 <button
                   type="button"

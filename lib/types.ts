@@ -24,6 +24,12 @@ export type P3dModel = {
   format: P3dFormat
   size: number
   position: number
+  // Which add-on combination this file shows: '' (the base model - the product
+  // alone) for the overwhelming majority, else sorted keys joined with '+'
+  // ('screens', 'cable-tray+screens'), optionally quantity-tagged ('shelves:2').
+  // Matching is exact-or-base: an active combination with no tagged file simply
+  // shows the base model. See migrations/006_model_context.sql.
+  context: string
 }
 
 // One model as the storefront sees it. Trimmed to what the gallery needs, because
@@ -38,6 +44,11 @@ export type P3dItem = {
   url: string
   format: P3dFormat
   label: string
+  // The add-on combination this file shows ('' = the base model). The strip
+  // offers base items only; the stage swaps to a tagged item when the page says
+  // that combination is active. Optional so a cached payload serialised before
+  // this shipped reads as all-base rather than throwing.
+  context?: string
 }
 
 // What `load` hands the browser, via shop's `shop.gallery-media` point. Must stay

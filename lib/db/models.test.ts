@@ -39,6 +39,7 @@ const model = (over: Partial<P3dModel> = {}): P3dModel => ({
   format: 'glb',
   size: 1234,
   position: 0,
+  context: '',
   ...over,
 })
 

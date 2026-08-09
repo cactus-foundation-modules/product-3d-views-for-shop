@@ -23,6 +23,7 @@ type ModelRow = {
   format: string
   size: number
   position: number
+  context: string
 }
 
 const toModel = (r: ModelRow): P3dModel => ({ ...r, format: r.format as P3dFormat })
@@ -33,7 +34,7 @@ const toModel = (r: ModelRow): P3dModel => ({ ...r, format: r.format as P3dForma
 const COLUMNS = Prisma.sql`
   "id", "product_id" AS "productId", "url", "media_provider" AS "mediaProvider",
   "media_key" AS "mediaKey", "media_id" AS "mediaId", "owns_media" AS "ownsMedia",
-  "filename", "format", "size", "position"
+  "filename", "format", "size", "position", "context"
 `
 
 // ---------------------------------------------------------------------------
@@ -165,13 +166,24 @@ export async function getTargets(productId: string): Promise<P3dTarget[]> {
 // Models
 // ---------------------------------------------------------------------------
 
+// Whether context-tagged rows (add-on combination files, see migration 006)
+// come back. The DEFAULT is base models only: every consumer that predates
+// contexts - the card overlays, the planner's resolver - means "the product's
+// own model" and a combined desk-with-screens file sorted first would silently
+// hijack it. The gallery, the fabric resolver and the admin editor opt in.
+type ModelReadOpts = { includeContexts?: boolean }
+
+function filterContexts<T extends { context: string }>(rows: T[], opts?: ModelReadOpts): T[] {
+  return opts?.includeContexts ? rows : rows.filter((r) => !r.context)
+}
+
 /**
  * Every model belonging to this product or any of its variations, in the order
  * they should appear. One query for the lot: the storefront needs all of them on
  * every product page, and the variation children are found through
  * shop-variations' mapping table where it is installed.
  */
-export async function getModelsForProductTree(productId: string): Promise<P3dModel[]> {
+export async function getModelsForProductTree(productId: string, opts?: ModelReadOpts): Promise<P3dModel[]> {
   const ids = [productId, ...(await getVariationLabels(productId)).keys()]
   const rows = await prisma.$queryRaw<ModelRow[]>`
     SELECT ${COLUMNS}
@@ -183,12 +195,13 @@ export async function getModelsForProductTree(productId: string): Promise<P3dMod
   // reference rewriter existed, so the storefront and the editor preview both get
   // the blob's current address rather than a 404. A no-op for rows already in step
   // (the common case), and for url-only Google Sheet imports with no media id.
-  return Promise.all(rows.map((r) => withFreshStorage(toModel(r))))
+  return Promise.all(filterContexts(rows, opts).map((r) => withFreshStorage(toModel(r))))
 }
 
 /** The editor's list: every model for the product tree, each named by its target. */
 export async function getAdminModels(productId: string): Promise<P3dAdminModel[]> {
-  const [models, labels] = await Promise.all([getModelsForProductTree(productId), getVariationLabels(productId)])
+  // Tagged rows included: the admin is exactly who needs to see and re-tag them.
+  const [models, labels] = await Promise.all([getModelsForProductTree(productId, { includeContexts: true }), getVariationLabels(productId)])
   // Signed like the storefront's, and for a duller reason than protection: the
   // editor loads these models into a viewer in the browser exactly as a shopper's
   // page does, so an unsigned url here would simply be refused by the Worker and
@@ -254,6 +267,15 @@ export async function deleteModel(id: string): Promise<void> {
 }
 
 /**
+ * Tag a model with the add-on context it shows ('' = the base model). The tag
+ * decides WHEN the file is drawn, never whether it exists - see
+ * migrations/006_model_context.sql for the matching rules.
+ */
+export async function updateModelContext(id: string, context: string): Promise<void> {
+  await prisma.$executeRaw`UPDATE "p3d_models" SET "context" = ${context} WHERE "id" = ${id}`
+}
+
+/**
  * Enabled variation children per parent, in variation order, for a whole batch -
  * one query for the lot. Empty without shop-variations, or for a parent with no
  * (enabled) variations. Used by the card-media provider to find, for a product with
@@ -278,7 +300,7 @@ export async function getVariationChildrenForProducts(productIds: string[]): Pro
 }
 
 /** Models attached directly to any of the given products (no variation tree walk). */
-export async function getModelsForProducts(productIds: string[]): Promise<P3dModel[]> {
+export async function getModelsForProducts(productIds: string[], opts?: ModelReadOpts): Promise<P3dModel[]> {
   if (productIds.length === 0) return []
   const rows = await prisma.$queryRaw<ModelRow[]>`
     SELECT ${COLUMNS}
@@ -286,7 +308,7 @@ export async function getModelsForProducts(productIds: string[]): Promise<P3dMod
     WHERE "product_id" = ANY(${productIds}::text[])
     ORDER BY "position", "created_at"
   `
-  return rows.map(toModel)
+  return filterContexts(rows, opts).map(toModel)
 }
 
 /**

@@ -505,6 +505,13 @@ export async function resolveFabricForChild(
   childProductId: string,
   parentProductId: string,
   config: FabricConfig,
+  // Add-on context: which combination's model to draw ('' or absent = the base
+  // model, exactly as before), and any COMPANION option values in play - an
+  // accessory's fabric or frame colour, chosen on the same page but belonging
+  // to another product entirely. Their option ids match the combined model's
+  // extra slots in this product's own fabric config, so composing them in is
+  // all it takes for the screens to paint alongside the desk.
+  opts?: { context?: string; extraValueIds?: string[] },
 ): Promise<FabricBundle | null> {
   // Without shop-variations there is no way to know which colours the child
   // carries, so nothing to compose. The plain model is the stage's job, not this
@@ -519,6 +526,27 @@ export async function resolveFabricForChild(
     JOIN "svr_options" o ON o."id" = ov."option_id"
     WHERE v."child_product_id" = ${childProductId}
   `
+
+  // The companion values, straight off their ids. First writer wins per option
+  // (the child's own values are already in `selected` and companion options are
+  // other products' - a clash would mean the caller sent a value of one of THIS
+  // child's options, where the child's own choice must stand).
+  const extraIds = (opts?.extraValueIds ?? []).filter(Boolean)
+  if (extraIds.length > 0) {
+    const extras = await prisma.$queryRaw<SelectedOptionValue[]>`
+      SELECT o."id" AS "optionId", ov."id" AS "valueId", ov."swatch", ov."label"
+      FROM "svr_option_values" ov
+      JOIN "svr_options" o ON o."id" = ov."option_id"
+      WHERE ov."id" = ANY(${extraIds}::text[])
+    `
+    const seen = new Set(selected.map((s) => s.optionId))
+    for (const extra of extras) {
+      if (!seen.has(extra.optionId)) {
+        selected.push(extra)
+        seen.add(extra.optionId)
+      }
+    }
+  }
 
   // The attribute values in force on this variation - the per-slot swatch sizes, the
   // model's overall height and any material picture set as an attribute rather than as
@@ -613,11 +641,18 @@ export async function resolveFabricForChild(
 
   // The whole product tree in one read: the model to draw (the child's own, else the
   // parent's) and the map that turns a config's model-height entry into a per-url
-  // fact both come from it.
-  const tree = await getModelsForProductTree(parentProductId)
-  const shown =
-    tree.find((m) => m.productId === childProductId) ??
-    tree.find((m) => m.productId === parentProductId)
+  // fact both come from it. Tagged rows included - the context pick below is
+  // exactly what they exist for.
+  const tree = await getModelsForProductTree(parentProductId, { includeContexts: true })
+  // Exact-or-base, per level: the requested context's file for the child, else
+  // the child's base model, else the same two for the parent. A combination
+  // without its own file shows the plain product - never a nearest guess.
+  const context = opts?.context ?? ''
+  const modelContext = (m: { context?: string }) => m.context ?? ''
+  const pick = (productId: string) =>
+    (context ? tree.find((m) => m.productId === productId && modelContext(m) === context) : undefined) ??
+    tree.find((m) => m.productId === productId && modelContext(m) === '')
+  const shown = pick(childProductId) ?? pick(parentProductId)
   if (!shown) return null
 
   // The measurement to calibrate against is the one along the config's scale axis:

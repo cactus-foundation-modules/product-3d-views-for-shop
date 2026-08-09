@@ -7,11 +7,24 @@ import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types
 
 const bundleCache = new Map<string, Promise<FabricBundle | null>>()
 
-export function fetchBundle(parentProductId: string, childProductId: string): Promise<FabricBundle | null> {
-  const key = `${parentProductId}|${childProductId}`
+// `context`/`extraValueIds` are the add-on combination in force (see the fabric
+// route). Both default to none, which is byte-for-byte the original request -
+// and both join the cache key, so the desk-alone bundle and the desk-with-
+// screens bundle are distinct entries rather than whichever landed first.
+export function fetchBundle(
+  parentProductId: string,
+  childProductId: string,
+  opts?: { context?: string; extraValueIds?: string[] },
+): Promise<FabricBundle | null> {
+  const context = opts?.context ?? ''
+  const extra = (opts?.extraValueIds ?? []).join(',')
+  const key = `${parentProductId}|${childProductId}|${context}|${extra}`
   let entry = bundleCache.get(key)
   if (!entry) {
-    const url = `/api/m/product-3d-views-for-shop/fabric/x?parent=${encodeURIComponent(parentProductId)}&child=${encodeURIComponent(childProductId)}`
+    const url =
+      `/api/m/product-3d-views-for-shop/fabric/x?parent=${encodeURIComponent(parentProductId)}&child=${encodeURIComponent(childProductId)}` +
+      (context ? `&context=${encodeURIComponent(context)}` : '') +
+      (extra ? `&extra=${encodeURIComponent(extra)}` : '')
     entry = fetch(url)
       .then((r) => (r.ok ? (r.json() as Promise<FabricBundle | null>) : null))
       // A failed resolve must not be cached, or a shopper whose connection blipped is
