@@ -43,7 +43,7 @@ export function ModelContextTag({ model, onSaved }: {
         style={{
           border: '1px dashed var(--color-border)', background: 'none', borderRadius: 999,
           padding: '0.05rem 0.375rem', fontSize: '0.625rem', cursor: 'pointer',
-          color: tagged ? 'var(--color-primary)' : 'var(--color-text-muted)', fontFamily: 'inherit',
+          color: tagged ? 'var(--color-primary)' : 'var(--color-text-secondary)', fontFamily: 'inherit',
           ...(tagged ? { borderStyle: 'solid', borderColor: 'var(--color-primary)' } : {}),
         }}
       >
@@ -69,7 +69,7 @@ export function ModelContextTag({ model, onSaved }: {
       <button type="button" onClick={() => void save()} disabled={saving} style={{ border: 'none', background: 'var(--color-primary)', color: 'var(--color-on-primary)', borderRadius: 6, padding: '0.125rem 0.5rem', fontSize: '0.6875rem', cursor: 'pointer', fontFamily: 'inherit' }}>
         {saving ? '…' : 'Save'}
       </button>
-      <button type="button" onClick={() => setEditing(false)} style={{ border: 'none', background: 'none', color: 'var(--color-text-muted)', fontSize: '0.6875rem', cursor: 'pointer', fontFamily: 'inherit' }}>
+      <button type="button" onClick={() => setEditing(false)} style={{ border: 'none', background: 'none', color: 'var(--color-text-secondary)', fontSize: '0.6875rem', cursor: 'pointer', fontFamily: 'inherit' }}>
         Cancel
       </button>
       {error && <span role="alert" style={{ color: 'var(--color-danger)', fontSize: '0.625rem' }}>{error}</span>}

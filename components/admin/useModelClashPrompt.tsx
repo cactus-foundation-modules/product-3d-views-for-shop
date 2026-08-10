@@ -41,7 +41,7 @@ export function useModelClashPrompt(): { ask: ModelClashAsk; dialog: React.React
     >
       <div style={{ background: 'var(--color-surface)', color: 'var(--color-text)', border: '1px solid var(--color-border)', borderRadius: 8, maxWidth: 'min(460px, 92vw)', width: '100%', padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', boxShadow: '0 25px 50px -12px rgba(0,0,0,.25)' }}>
         <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>“{pending.existingName}” is already here</h3>
-        <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
+        <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
           A 3D file with that name is already filed with this product. Replace it (anything showing it switches to the new model), or keep both and upload this one as “{pending.suggestedName}”.
         </p>
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginTop: '0.25rem' }}>

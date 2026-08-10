@@ -147,7 +147,7 @@ export function Model3dPreviewModal({ productId, childProductId, model, label, o
           <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {label || model.filename}
           </h3>
-          <span style={{ flex: 1, minWidth: 0, fontSize: '0.8125rem', color: 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: '0.8125rem', color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {label ? model.filename : ''}
           </span>
           <button
@@ -155,7 +155,7 @@ export function Model3dPreviewModal({ productId, childProductId, model, label, o
             aria-label="Close"
             autoFocus
             onClick={onClose}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem', color: 'var(--color-text-muted)', lineHeight: 1, flexShrink: 0 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem', color: 'var(--color-text-secondary)', lineHeight: 1, flexShrink: 0 }}
           >
             ×
           </button>
@@ -167,7 +167,7 @@ export function Model3dPreviewModal({ productId, childProductId, model, label, o
             : <p className="p3d-note">Loading…</p>}
         </div>
 
-        <p style={{ margin: 0, padding: '0.625rem 1.25rem', borderTop: '1px solid var(--color-border)', fontSize: '0.8125rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>
+        <p style={{ margin: 0, padding: '0.625rem 1.25rem', borderTop: '1px solid var(--color-border)', fontSize: '0.8125rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
           {pending
             ? 'Fetching this variation’s materials…'
             : fabric

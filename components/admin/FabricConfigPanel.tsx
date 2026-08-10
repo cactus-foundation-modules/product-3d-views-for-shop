@@ -179,7 +179,7 @@ const css = `
 .p3d-fab{display:grid;gap:1.25rem;margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--color-border)}
 .p3d-fab-h{font-size:1rem;font-weight:600;color:var(--color-text);margin:0}
 .p3d-fab-sub{font-size:.8125rem;font-weight:700;letter-spacing:.02em;text-transform:uppercase;color:var(--color-text-secondary);margin:0}
-.p3d-fab-help{color:var(--color-text-muted);font-size:.8125rem;margin:0;line-height:1.5}
+.p3d-fab-help{color:var(--color-text-secondary);font-size:.8125rem;margin:0;line-height:1.5}
 .p3d-fab-sec{display:grid;gap:.625rem}
 .p3d-fab-row{display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;padding:.625rem .75rem;
   border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface)}
@@ -187,7 +187,7 @@ const css = `
 .p3d-fab-label{font-size:.75rem;font-weight:600;color:var(--color-text-secondary)}
 .p3d-fab-select{padding:.375rem .5rem;border:1px solid var(--color-border);border-radius:6px;
   background:var(--color-bg);color:var(--color-text);font-size:.8125rem;font-family:inherit;min-width:150px}
-.p3d-fab-when{font-size:.8125rem;color:var(--color-text-muted);display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.p3d-fab-when{font-size:.8125rem;color:var(--color-text-secondary);display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .p3d-fab-colour{display:flex;gap:.375rem;align-items:center}
 .p3d-fab-swatch{width:2.25rem;height:2rem;padding:2px;border:1px solid var(--color-border);border-radius:6px;
   background:var(--color-bg);cursor:pointer;flex:none}
@@ -215,7 +215,7 @@ const css = `
 .p3d-stage-canvas:focus-visible ~ .p3d-hint-keys{display:block}
 .p3d-stage-canvas:focus-visible ~ .p3d-hint-drag{display:none}
 .p3d-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  text-align:center;padding:1rem;font-size:.8125rem;color:var(--color-text-muted)}
+  text-align:center;padding:1rem;font-size:.8125rem;color:var(--color-text-secondary)}
 .p3d-hint{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:1;pointer-events:none;
   font-size:11px;line-height:1;padding:5px 9px;border-radius:999px;background:var(--color-fg);color:var(--color-bg);opacity:.75}
 /* The viewer's "Click to interact" gate pill (see lib/viewer-css.ts). This panel

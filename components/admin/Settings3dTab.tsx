@@ -14,10 +14,10 @@ import { P3D_CONFIG_DEFAULTS, type P3dConfig } from '@/modules/product-3d-views-
 // this is showing, because it would not save any of this.
 
 const sectionHeading: React.CSSProperties = { margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600 }
-const sectionNote: React.CSSProperties = { margin: '0 0 1rem', fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }
+const sectionNote: React.CSSProperties = { margin: '0 0 1rem', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }
 const checkboxRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-3)', cursor: 'pointer' }
 const fieldGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: 'var(--form-gap)' }
-const hint: React.CSSProperties = { display: 'block', marginTop: '0.25rem', fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }
+const hint: React.CSSProperties = { display: 'block', marginTop: '0.25rem', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }
 
 const TONE_MAPPING_LABELS: Record<P3dConfig['toneMapping'], string> = {
   none: 'None (as supplied)',
@@ -59,7 +59,7 @@ function SliderField({
   return (
     <div className="field" style={{ margin: 0, opacity: disabled ? 0.5 : 1 }}>
       <label>
-        {label} <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>{value}</span>
+        {label} <span style={{ color: 'var(--color-text-secondary)', fontWeight: 400 }}>{value}</span>
       </label>
       <input
         type="range"
@@ -142,7 +142,7 @@ export function Settings3dTab() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: 'var(--space-4)' }}>
-        <p style={{ margin: 0, color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
+        <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
           How every 3D model on the site is lit and handled. Applies to the whole catalogue, not one product.
         </p>
         <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>

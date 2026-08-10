@@ -30,11 +30,11 @@ const css = `
 .p3d-ed-row{display:flex;gap:.75rem;align-items:center;padding:.625rem .75rem;
   border:1px solid var(--color-border);border-radius:8px;background:var(--color-surface)}
 .p3d-ed-name{font-size:.875rem;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.p3d-ed-meta{font-size:.75rem;color:var(--color-text-muted);flex:1}
+.p3d-ed-meta{font-size:.75rem;color:var(--color-text-secondary);flex:1}
 .p3d-ed-empty{padding:1rem;border:1px dashed var(--color-border);border-radius:8px;
-  color:var(--color-text-muted);font-size:.875rem}
+  color:var(--color-text-secondary);font-size:.875rem}
 .p3d-ed-err{color:var(--color-danger);font-size:.8125rem;margin:0}
-.p3d-ed-help{color:var(--color-text-muted);font-size:.8125rem;margin:0;line-height:1.5}
+.p3d-ed-help{color:var(--color-text-secondary);font-size:.8125rem;margin:0;line-height:1.5}
 .p3d-ed-viewer{display:grid;gap:.625rem;padding:.75rem;border:1px solid var(--color-border);
   border-radius:8px;background:var(--color-surface)}
 .p3d-ed-viewer h4{margin:0;font-size:.875rem;color:var(--color-text)}
@@ -43,7 +43,7 @@ const css = `
   color:var(--color-text);cursor:pointer}
 .p3d-ed-viewer-slider{display:flex;gap:.75rem;align-items:center;flex:1;min-width:14rem}
 .p3d-ed-viewer-slider input[type=range]{flex:1}
-.p3d-ed-viewer-val{font-size:.8125rem;color:var(--color-text-muted);
+.p3d-ed-viewer-val{font-size:.8125rem;color:var(--color-text-secondary);
   font-variant-numeric:tabular-nums;min-width:2.5rem;text-align:right}
 .p3d-ed-pick{display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap}
 .p3d-ed-pick-field{display:grid;gap:.25rem}
@@ -65,7 +65,7 @@ const css = `
 .p3d-stage-canvas:focus-visible ~ .p3d-hint-keys{display:block}
 .p3d-stage-canvas:focus-visible ~ .p3d-hint-drag{display:none}
 .p3d-note{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  text-align:center;padding:1rem;font-size:.8125rem;color:var(--color-text-muted)}
+  text-align:center;padding:1rem;font-size:.8125rem;color:var(--color-text-secondary)}
 .p3d-hint{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:1;pointer-events:none;
   font-size:11px;line-height:1;padding:5px 9px;border-radius:999px;
   background:var(--color-fg);color:var(--color-bg);opacity:.75;white-space:nowrap}

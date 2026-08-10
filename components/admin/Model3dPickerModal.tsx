@@ -210,7 +210,7 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
             type="button"
             aria-label="Close"
             onClick={onClose}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem', color: 'var(--color-text-muted)', lineHeight: 1, flexShrink: 0 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.25rem', color: 'var(--color-text-secondary)', lineHeight: 1, flexShrink: 0 }}
           >
             ×
           </button>
@@ -219,7 +219,7 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
         {error && <p style={{ color: 'var(--color-danger)', margin: '0.5rem 1.25rem 0', fontSize: '0.8125rem' }}>{error}</p>}
 
         {!trimmed && folderId !== undefined && (
-          <div style={{ padding: '0.5rem 1.25rem 0', display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8125rem', color: 'var(--color-text-muted)' }}>
+          <div style={{ padding: '0.5rem 1.25rem 0', display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8125rem', color: 'var(--color-text-secondary)' }}>
             {breadcrumb.length === 0
               ? <span>All folders</span>
               : <button type="button" style={crumbStyle} onClick={() => setFolderId(null)}>All folders</button>}
@@ -255,10 +255,10 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
             </div>
           )}
           {loading || folderId === undefined ? (
-            <p style={{ color: 'var(--color-text-muted)', textAlign: 'center' }}>Loading…</p>
+            <p style={{ color: 'var(--color-text-secondary)', textAlign: 'center' }}>Loading…</p>
           ) : items.length === 0 ? (
             subfolders.length === 0 && (
-              <p style={{ color: 'var(--color-text-muted)', textAlign: 'center', padding: '1rem', fontSize: '0.875rem' }}>
+              <p style={{ color: 'var(--color-text-secondary)', textAlign: 'center', padding: '1rem', fontSize: '0.875rem' }}>
                 {trimmed
                   ? 'No 3D files match that search.'
                   : 'No 3D files in this folder yet. Upload one, or browse the folders above.'}
@@ -293,7 +293,7 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
                     <span style={{ flex: 1, minWidth: 0, fontSize: '0.875rem', color: 'var(--color-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {nameOf(item)}
                     </span>
-                    <span style={{ flexShrink: 0, fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
+                    <span style={{ flexShrink: 0, fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>
                       {fmtSize(item.sizeBytes)}
                     </span>
                   </button>

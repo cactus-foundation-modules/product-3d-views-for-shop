@@ -150,7 +150,7 @@ export function Product3dVariantColumn({ productId, childProductId, label }: {
             ...box,
             border: dragOver ? '2px solid var(--color-primary)' : '1px dashed var(--color-border)',
             background: dragOver ? 'var(--color-primary-subtle)' : 'none',
-            color: dragOver ? 'var(--color-primary)' : 'var(--color-text-muted)',
+            color: dragOver ? 'var(--color-primary)' : 'var(--color-text-secondary)',
             cursor: uploading ? 'progress' : 'pointer',
           }}
           aria-label={`Add a 3D model to ${label}: choose an existing file or upload one, or drop one here`}
