@@ -108,7 +108,7 @@ function Thumb3d({ item, settings, fabric, active, thumbClass, thumbOnClass, onP
   )
 }
 
-export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], candidateProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
+export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
   const raw = payload as P3dPayload
   // The strip offers BASE models only. Add-on-combination files (a tagged
   // context) exist for the stage to swap to when the page announces that
@@ -129,12 +129,12 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
   if (activeProductId !== null && activeProductId !== lastResolved) setLastResolved(activeProductId)
   const effectiveProductId = activeProductId ?? lastResolved
 
-  // The promoted variations, already narrowed by the host to the ones the
-  // shopper's picks still allow, with the surviving unpromoted ones behind them
-  // as a last resort (see visibleItems). `effectiveProductId` is passed rather
-  // than `activeProductId` so a mid-reconfigure gap keeps showing the model the
-  // shopper had settled on instead of falling back to either list.
-  const items = visibleItems(data, effectiveProductId, featuredProductIds, candidateProductIds)
+  // The promoted variations, which the host keeps up until a whole combination
+  // resolves - so a part-made choice leaves the opening view exactly as it is
+  // rather than swapping the model the shopper is studying for another one.
+  // `effectiveProductId` is passed rather than `activeProductId` so a
+  // mid-reconfigure gap keeps showing the model they had settled on.
+  const items = visibleItems(data, effectiveProductId, featuredProductIds)
 
   // The shopper had a model on the stage and then changed variation to one that
   // does not offer it. Hand the stage back rather than leaving it showing a model

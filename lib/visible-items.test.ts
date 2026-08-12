@@ -152,39 +152,4 @@ describe('visibleItems', () => {
       expect(keys(visibleItems(p, null))).toEqual(['own'])
     })
   })
-
-  // The last resort: a part-made choice, nothing on the product itself and
-  // nothing promoted still standing. Without these the strip went blank between
-  // the shopper's first pick and their last.
-  describe('surviving variations', () => {
-    it('shows the surviving variations when there is nothing else to show', () => {
-      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
-      expect(keys(visibleItems(p, null, [], [OAK, WALNUT]))).toEqual(['oak', 'walnut'])
-    })
-
-    it("leaves the product's own model to speak for it", () => {
-      const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
-      expect(keys(visibleItems(p, null, [], [OAK]))).toEqual(['own'])
-    })
-
-    it('yields to a promoted variation', () => {
-      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
-      expect(keys(visibleItems(p, null, [OAK], [OAK, WALNUT]))).toEqual(['oak'])
-    })
-
-    it('is beaten outright by a chosen variation', () => {
-      const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
-      expect(keys(visibleItems(p, WALNUT, [], [OAK, WALNUT]))).toEqual(['walnut'])
-    })
-
-    it('collapses two survivors sharing one file', () => {
-      const p = payload([item('oak', OAK, '/wood.glb'), item('walnut', WALNUT, '/wood.glb')])
-      expect(keys(visibleItems(p, null, [], [OAK, WALNUT]))).toEqual(['oak'])
-    })
-
-    it('changes nothing for a gallery that passes none', () => {
-      const p = payload([item('oak', OAK, '/oak.glb')])
-      expect(visibleItems(p, null, [])).toEqual([])
-    })
-  })
 })

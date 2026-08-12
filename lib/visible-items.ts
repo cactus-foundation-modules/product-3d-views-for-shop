@@ -19,16 +19,10 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 //    arrive as `featuredProductIds` and show behind the product's own while
 //    nothing is chosen. That is a decision someone made about this range - "the
 //    oak one is the one worth showing" - rather than the module guessing, which
-//    is the difference between it and the case above. The host narrows the list
-//    to the variations the shopper's picks still allow, so it never offers a
-//    finish they have ruled out; a chosen variation still wins outright, below.
-//  - And, last of all, `candidateProductIds`: the variations a part-made choice
-//    has left standing, promoted or not. Used only where the two cases above have
-//    come up empty, which on a product with no model of its own and nothing
-//    promoted is the difference between a strip and a blank space. The host sends
-//    none until the shopper has picked something, so this never fires on the
-//    opening view - the "don't splash every variation up front" rule above still
-//    holds where it matters.
+//    is the difference between it and the case above. The host keeps the list up
+//    until a whole combination resolves and empties it from then on, so a
+//    part-made choice leaves the opening view alone rather than swapping the
+//    model out from under the shopper; a chosen variation wins outright, below.
 //  - Once a variation carrying its own model is chosen, that model replaces the
 //    product's own rather than sitting beside it. The chosen model is the exact
 //    thing being bought; the generic one is then a second, near-identical
@@ -43,12 +37,7 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 //    and the honest reading of two identical thumbnails is that something is
 //    broken. Deduplication is by url, since that is what identity means for a
 //    file that was uploaded once and pointed at twice.
-export function visibleItems(
-  payload: P3dPayload,
-  activeProductId: string | null,
-  featuredProductIds: string[] = [],
-  candidateProductIds: string[] = [],
-): P3dItem[] {
+export function visibleItems(payload: P3dPayload, activeProductId: string | null, featuredProductIds: string[] = []): P3dItem[] {
   const own = payload.items.filter((i) => i.productId === payload.parentProductId)
   const variation = payload.items.filter((i) => i.productId !== payload.parentProductId)
 
@@ -58,21 +47,14 @@ export function visibleItems(
 
   if (relevant.length > 0) return dedupeByUrl(relevant)
 
-  // Promoted variations only count while nothing is chosen. A shopper who has
-  // settled on walnut and whose choice carries no model of its own is shown the
-  // product's generic one, not the oak one somebody promoted - the promotion was
-  // about the opening view, and answering their choice with a rival finish is the
-  // exact confusion this whole rule exists to avoid.
+  // Promoted variations only count while no combination is settled. A shopper who
+  // has settled on walnut and whose choice carries no model of its own is shown
+  // the product's generic one, not the oak one somebody promoted - the promotion
+  // was about the view before they chose, and answering their choice with a rival
+  // finish is the exact confusion this whole rule exists to avoid.
   if (activeProductId !== null) return dedupeByUrl(own)
 
   const featured = featuredProductIds.flatMap((id) => variation.filter((i) => i.productId === id))
-  // Nothing of the product's own and nothing promoted still standing: the
-  // variations the shopper's picks have left are all there is, so show those
-  // rather than an empty strip. Reached only mid-choice - the host sends no
-  // candidates before the first pick - so the opening view is untouched by it.
-  if (own.length === 0 && featured.length === 0) {
-    return dedupeByUrl(candidateProductIds.flatMap((id) => variation.filter((i) => i.productId === id)))
-  }
   // The product's own first, so a page that has both opens on the model that
   // describes the product rather than on one of the finishes. Deduplicated across
   // the two together: a promoted variation pointing at the same file as the
