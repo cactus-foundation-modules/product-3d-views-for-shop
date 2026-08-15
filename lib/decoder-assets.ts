@@ -51,6 +51,13 @@ const ASSET_ROOT = join(process.cwd(), 'modules', 'product-3d-views-for-shop', '
 const CACHE_CONTROL = 'public, max-age=86400'
 
 export async function serveDecoderAsset(file: string): Promise<NextResponse> {
+  // Object.hasOwn, not a bare lookup. FILES is a plain object literal, so
+  // `FILES['constructor']` (or 'toString', or '__proto__') hands back something
+  // truthy off Object.prototype, and the code below then joins `undefined` into
+  // a path and answers 500 where it means 404. Not a way to read anything - the
+  // read fails and is caught - but a route that 500s on a made-up filename is a
+  // route that logs noise and looks like it broke.
+  if (!Object.hasOwn(FILES, file)) return new NextResponse('Not found', { status: 404 })
   const entry = FILES[file]
   if (!entry) return new NextResponse('Not found', { status: 404 })
 
