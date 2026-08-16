@@ -102,6 +102,21 @@ async function planRow(childProductId: string, row: Record<string, string>, ctx?
   }
 }
 
+// Every child's current models, keyed by child id. Shared by both preload forms:
+// the per-parent one and the batched one differ only in how many children they
+// are handed, which is the whole of the difference between one query and 349.
+async function modelsByChild(childProductIds: string[]): Promise<Map<string, P3dModel[]>> {
+  const byChild = new Map<string, P3dModel[]>()
+  const unique = [...new Set(childProductIds)].filter(Boolean)
+  if (unique.length === 0) return byChild
+  for (const m of await getModelsForProducts(unique)) {
+    const list = byChild.get(m.productId) ?? []
+    list.push(m)
+    byChild.set(m.productId, list)
+  }
+  return byChild
+}
+
 export const product3dVariantFieldProvider = {
   // Always one column: unlike attributes, whose columns depend on the product, any
   // variant can have a 3D file, so the column is offered on every product. A
@@ -129,14 +144,16 @@ export const product3dVariantFieldProvider = {
   // Preload every child's current models for this parent in one query, keyed by
   // child id, so applyImportedRow diffs against memory instead of reading per row.
   async beginImport(_productId: string, childProductIds: string[]): Promise<Map<string, P3dModel[]>> {
-    const models = await getModelsForProducts(childProductIds)
-    const byChild = new Map<string, P3dModel[]>()
-    for (const m of models) {
-      const list = byChild.get(m.productId) ?? []
-      list.push(m)
-      byChild.set(m.productId, list)
-    }
-    return byChild
+    return modelsByChild(childProductIds)
+  },
+
+  // The same, for many parents at once. This provider never cared which parent a
+  // child belonged to - the models are looked up by child id - so batching is
+  // simply one query over every child instead of one per parent. On a catalogue
+  // of 349 variable products that was 148 seconds of round trips for an answer
+  // that fits in a single query.
+  async beginImportMany(parents: Array<{ productId: string; childProductIds: string[] }>): Promise<Map<string, P3dModel[]>> {
+    return modelsByChild(parents.flatMap((p) => p.childProductIds))
   },
 
   async applyImportedRow(_productId: string, childProductId: string, row: Record<string, string>, ctx?: unknown) {
