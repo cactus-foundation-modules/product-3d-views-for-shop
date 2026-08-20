@@ -17,19 +17,19 @@ import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-mo
 import { preloadProductAssets } from '@/modules/product-3d-views-for-shop/lib/preload'
 import { mountThumb } from '@/modules/product-3d-views-for-shop/lib/three/thumb-stage'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
-import { viewerChromeCss as css } from '@/modules/product-3d-views-for-shop/lib/viewer-css'
+import { ViewerChromeStyle } from '@/modules/product-3d-views-for-shop/components/public/P3dChrome'
 import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
 import type { P3dItem, P3dPayload, FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { ShopGalleryExtraStageProps, ShopGalleryExtraThumbsProps } from '@/modules/shop/lib/gallery-media'
 
-// The viewer + thumbnail chrome now lives in lib/viewer-css.ts (imported as `css`
-// above), shared with the product-card 3D overlay so a stage looks identical
-// wherever it is mounted. Colours are tokens throughout.
+// The viewer + thumbnail chrome now lives in lib/viewer-css.ts, stamped through
+// the shared ViewerChromeStyle (components/public/P3dChrome) and shared with the
+// product-card 3D overlay so a stage looks identical wherever it is mounted, and
+// a page that mounts both carries one copy between them. Colours are tokens
+// throughout.
 
-function Style() {
-  return <style dangerouslySetInnerHTML={{ __html: css }} />
-}
+const Style = ViewerChromeStyle
 
 // One auto-rotating thumbnail. The canvas is plain 2D and is painted by the
 // shared renderer (lib/three/thumb-stage.ts) - see there for why every thumbnail

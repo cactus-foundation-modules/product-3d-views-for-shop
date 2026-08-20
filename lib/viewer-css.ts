@@ -104,3 +104,38 @@ export const viewerChromeCss = `
 @media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
+
+// The product-card overlay's own chrome: the closed "3D" badge, the stage that
+// replaces the picture when it is tapped, and that stage's close/step controls.
+// Separate from viewerChromeCss because a product-detail gallery mounts a viewer
+// without ever mounting a card, so the two are hoisted as two stylesheets and a
+// page only carries the ones it uses. No selector is shared between them.
+export const cardChromeCss = `
+.p3d-card-btn{position:absolute;right:8px;bottom:8px;z-index:2;display:inline-flex;align-items:center;gap:5px;
+  padding:5px 9px;border-radius:999px;border:1px solid var(--color-border);background:var(--color-surface);
+  color:var(--color-fg);font-family:inherit;font-size:11px;font-weight:700;line-height:1;letter-spacing:.02em;
+  cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:background .15s ease}
+.p3d-card-btn:hover,.p3d-card-btn:focus-visible{background:var(--color-bg-subtle)}
+.p3d-card-btn:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.p3d-card-btn svg{flex:none}
+.p3d-card-stage{position:absolute;inset:0;z-index:3;background:var(--color-surface)}
+.p3d-card-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.p3d-card-close{position:absolute;top:8px;right:8px;z-index:4;display:flex;align-items:center;justify-content:center;
+  width:30px;height:30px;padding:0;border-radius:50%;border:1px solid var(--color-border);background:var(--color-surface);
+  color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:background .15s ease}
+.p3d-card-close:hover,.p3d-card-close:focus-visible{background:var(--color-bg-subtle)}
+.p3d-card-close:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+/* The stage's own carousel arrows: same shape and placement as shop's card arrows, so
+   stepping the model reads as the same control the shopper flicked pictures with. Above
+   the canvas, clear of the close button (top-right) and the AR/reset chrome (bottom). */
+.p3d-card-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:4;display:flex;align-items:center;
+  justify-content:center;width:34px;height:34px;padding:0;border-radius:50%;border:1px solid var(--color-border);
+  background:var(--color-surface);color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);
+  transition:background .15s ease}
+.p3d-card-nav:hover,.p3d-card-nav:focus-visible{background:var(--color-bg-subtle)}
+.p3d-card-nav:focus-visible{outline:2px solid var(--color-primary);outline-offset:2px}
+.p3d-card-nav svg{flex:none}
+.p3d-card-nav-prev{left:8px}
+.p3d-card-nav-next{right:8px}
+`
+
