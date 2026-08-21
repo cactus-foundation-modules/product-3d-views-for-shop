@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="module-art.webp" alt="Product 3D Views for Shop" width="640" />
+</p>
+
 # Product 3D Views for Shop
 
 3D models for the [Cactus](https://github.com/usersaynoso/cactus-foundation) shop. Upload a model against a product or one of its variations, and it appears in the product gallery as an extra thumbnail with a **3D** badge, turning gently on its own. Click it and the model replaces the main photograph, where the shopper can turn, pan and zoom it.
