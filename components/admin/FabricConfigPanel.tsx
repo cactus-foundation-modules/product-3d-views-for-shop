@@ -229,6 +229,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const [loading, setLoading] = useState(true)
   const [config, setConfig] = useState<FabricConfig>(EMPTY)
   const [variationOptions, setVariationOptions] = useState<FabricColourOption[]>([])
+  const [addonOptions, setAddonOptions] = useState<FabricColourOption[]>([])
   const [colourAttributes, setColourAttributes] = useState<FabricColourOption[]>([])
   const [attributes, setAttributes] = useState<FabricSizeAttribute[]>([])
   const [models, setModels] = useState<P3dAdminModel[]>([])
@@ -258,7 +259,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
     let cancelled = false
     fetch(`/api/m/product-3d-views-for-shop/admin/products/${productId}/fabric`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { config: FabricConfig | null; options: FabricColourOption[]; colourAttributes: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
+      .then((data: { config: FabricConfig | null; options: FabricColourOption[]; addonOptions?: FabricColourOption[]; colourAttributes: FabricColourOption[]; attributes: FabricSizeAttribute[]; models: P3dAdminModel[]; settings: P3dConfig } | null) => {
         if (cancelled || !data) { setLoading(false); return }
         // A measured size is a fact about the FILE, and both this panel and the
         // storefront read it by url, so every saved key is pulled onto its url before
@@ -326,6 +327,7 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
         // is usable before a re-detect and a save without one keeps them.
         setDensities(Object.fromEntries(saved.slots.map((s) => [s.materialName, s.texelDensity])))
         setVariationOptions(data.options)
+        setAddonOptions(data.addonOptions ?? [])
         setColourAttributes(data.colourAttributes ?? [])
         setAttributes(data.attributes)
         setModels(data.models)
@@ -342,8 +344,8 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   // points at, or the preview of a working product goes blank.
   // Attribute ids arrive prefixed from the server, so the two can never collide.
   const colourSources = useMemo(
-    () => [...variationOptions, ...colourAttributes],
-    [variationOptions, colourAttributes],
+    () => [...variationOptions, ...addonOptions, ...colourAttributes],
+    [variationOptions, addonOptions, colourAttributes],
   )
 
   // The variation options worth offering as a colour source: those with at least one
@@ -357,6 +359,18 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
   const paintableOptions = useMemo(
     () => variationOptions.filter((o) => o.values.some((v) => v.swatch && v.swatch.trim() !== '')),
     [variationOptions],
+  )
+
+  // The same filter over the ACCESSORIES' options. A combined model - a desk with the
+  // pedestal that hangs off it - carries the accessory's materials, and the shopper
+  // picks that accessory's finish on the accessory, so the part can only be painted
+  // from an option belonging to another product. Offered in its own group, named by
+  // the accessory, because "Finish" alone says nothing on a product with three of
+  // them. A product with no accessories, or an install without the add-ons module,
+  // gets an empty list and the group is simply not drawn.
+  const paintableAddonOptions = useMemo(
+    () => addonOptions.filter((o) => o.values.some((v) => v.swatch && v.swatch.trim() !== '')),
+    [addonOptions],
   )
 
   // The overall-size sources, split by the screen they were set up on. Anything not
@@ -862,8 +876,9 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
           // the panel does not quietly re-point a working product at something else;
           // there is no way to pick one that is not already stored.
           const legacySource = paintableOptions.some((o) => o.id === slot.colourOptionId)
+            || paintableAddonOptions.some((o) => o.id === slot.colourOptionId)
             ? undefined
-            : variationOptions.find((o) => o.id === slot.colourOptionId)
+            : [...variationOptions, ...addonOptions].find((o) => o.id === slot.colourOptionId)
           return (
             <div key={i} className="p3d-fab-row">
               <div className="p3d-fab-field">
@@ -899,6 +914,13 @@ export function FabricConfigPanel({ productId }: { productId: string }) {
                   {paintableOptions.length > 0 && (
                     <optgroup label="Variation options">
                       {paintableOptions.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {paintableAddonOptions.length > 0 && (
+                    <optgroup label="Add-on options">
+                      {paintableAddonOptions.map((o) => (
                         <option key={o.id} value={o.id}>{o.name}</option>
                       ))}
                     </optgroup>

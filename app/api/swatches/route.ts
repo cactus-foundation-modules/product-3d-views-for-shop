@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabric-config'
-import { listColourAttributes, listColourOptions } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
+import { listAddonColourOptions, listColourAttributes, listColourOptions } from '@/modules/product-3d-views-for-shop/lib/fabric/resolve'
 
 // Every unique fabric-swatch texture url a product's variations could paint, so the
 // storefront can warm its texture cache in the background once the product page has
@@ -48,15 +48,19 @@ export async function GET(request: NextRequest) {
     const colourOptionIds = new Set(config.slots.map((s) => s.colourOptionId))
     if (colourOptionIds.size === 0) return json({ urls: [] })
 
-    // Both colour sources, since a slot may be painted from a variation option or
-    // from an attribute; the id in the config already says which, so the two lists
-    // are simply searched together.
-    const [variationOptions, colourAttributes] = await Promise.all([
+    // Every colour source, since a slot may be painted from a variation option, from
+    // an attribute, or from an option belonging to an ACCESSORY the product is shown
+    // with (a combined model carries the accessory's materials too); the id in the
+    // config already says which, so the lists are simply searched together. Leaving
+    // the accessory's swatches out left exactly the parts a shopper toggles most -
+    // the add-on they have just ticked - waiting on a cold fetch.
+    const [variationOptions, addonOptions, colourAttributes] = await Promise.all([
       listColourOptions(parent),
+      listAddonColourOptions(parent),
       listColourAttributes(parent),
     ])
     const urls = new Set<string>()
-    for (const option of [...variationOptions, ...colourAttributes]) {
+    for (const option of [...variationOptions, ...addonOptions, ...colourAttributes]) {
       if (!colourOptionIds.has(option.id)) continue
       for (const value of option.values) {
         if (isHttpUrl(value.swatch)) urls.add(value.swatch)

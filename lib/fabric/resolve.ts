@@ -24,6 +24,7 @@ let patProbe: { value: boolean; at: number } | null = null
 let helpingProbe: { value: boolean; at: number } | null = null
 let swatchSizeProbe: { value: boolean; at: number } | null = null
 let optionSourceProbe: { value: boolean; at: number } | null = null
+let padProbe: { value: boolean; at: number } | null = null
 const PROBE_TTL_MS = 30_000
 
 export async function hasVariationsTables(): Promise<boolean> {
@@ -52,6 +53,28 @@ export async function hasAttributeTables(): Promise<boolean> {
   `
   const value = Boolean(rows[0]?.present)
   patProbe = { value, at: Date.now() }
+  return value
+}
+
+/**
+ * Whether product-addons-for-shop is installed, so a product's ACCESSORIES can be
+ * offered as colour sources alongside its own options.
+ *
+ * A combined model - a desk with the pedestal that hangs off it - carries the
+ * accessory's materials as well as the product's, and the accessory's finish is
+ * chosen on the accessory, not on the product. The storefront has always painted
+ * those parts (the add-on's chosen values arrive as `extraValueIds`); what was
+ * missing was any way to SET one up, since the dropdowns only ever offered the
+ * product's own options. Same optional-companion bargain as the two above: a raw
+ * read behind a presence probe, never an import, and no dependency declared.
+ */
+export async function hasAddonTables(): Promise<boolean> {
+  if (padProbe && Date.now() - padProbe.at < PROBE_TTL_MS) return padProbe.value
+  const rows = await prisma.$queryRaw<[{ present: boolean }]>`
+    SELECT (to_regclass('public.pad_links') IS NOT NULL) AS "present"
+  `
+  const value = Boolean(rows[0]?.present)
+  padProbe = { value, at: Date.now() }
   return value
 }
 
@@ -734,6 +757,60 @@ export async function listColourAttributes(productId: string): Promise<FabricCol
       name: choice.name,
       values: valuesByAttribute.get(choice.attributeId) ?? [],
     }))
+}
+
+// How far down the accessory chain to look. An add-on can itself carry add-ons - a
+// pedestal with a handle set - and a combined model may hold any of them, so the walk
+// follows the chain rather than stopping at the products hung directly off this one.
+// Capped because the links are a graph, not a tree: a cycle would otherwise walk for
+// ever, and nothing sensible sits five accessories deep.
+const ADDON_DEPTH = 4
+
+/**
+ * The variation options of every ACCESSORY this product can be bought with, for the
+ * colour dropdowns alongside its own.
+ *
+ * A combined model file holds the accessory's materials too, and the shopper picks
+ * that accessory's finish on the accessory itself, so a slot painting the pedestal's
+ * carcass or its handles has to name an option belonging to another product. Ids are
+ * returned raw, exactly as a variation option's own: the storefront resolver already
+ * accepts them (they arrive as `extraValueIds` from the add-on box) and the stored
+ * form is therefore identical to one written before this existed - hand-written
+ * configs keep working and start showing their real name in the panel.
+ *
+ * Named by their product, since "Finish" on its own says nothing on a page listing
+ * three accessories that each have one.
+ */
+export async function listAddonColourOptions(productId: string): Promise<FabricColourOption[]> {
+  if (!(await hasAddonTables()) || !(await hasVariationsTables())) return []
+  const rows = await prisma.$queryRaw<
+    { optionId: string; name: string; productName: string; valueId: string; label: string; swatch: string | null }[]
+  >`
+    WITH RECURSIVE "tree" AS (
+      SELECT l."addon_product_id" AS "productId", 1 AS "depth"
+      FROM "pad_links" l
+      WHERE l."product_id" = ${productId} AND l."enabled" = true
+      UNION
+      SELECT l."addon_product_id", t."depth" + 1
+      FROM "pad_links" l
+      JOIN "tree" t ON l."product_id" = t."productId"
+      WHERE l."enabled" = true AND t."depth" < ${ADDON_DEPTH}
+    )
+    SELECT o."id" AS "optionId", o."name", p."name" AS "productName",
+           ov."id" AS "valueId", ov."label", ov."swatch"
+    FROM "tree" t
+    JOIN "shp_products" p ON p."id" = t."productId"
+    JOIN "svr_options" o ON o."product_id" = t."productId"
+    JOIN "svr_option_values" ov ON ov."option_id" = o."id"
+    ORDER BY p."name" ASC, o."position" ASC, ov."position" ASC
+  `
+  const byId = new Map<string, FabricColourOption>()
+  for (const row of rows) {
+    const existing = byId.get(row.optionId) ?? { id: row.optionId, name: `${row.productName} - ${row.name}`, values: [] }
+    existing.values.push({ id: row.valueId, label: row.label, swatch: row.swatch })
+    byId.set(row.optionId, existing)
+  }
+  return [...byId.values()]
 }
 
 // One thing the "Overall size from" dropdown can be pointed at. `source` says which
