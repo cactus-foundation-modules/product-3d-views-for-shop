@@ -10,8 +10,9 @@
 // exactly why they carry their own 'use client' boundary - see the contract note
 // in modules/shop/lib/gallery-media.ts.
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
+import { asked, freshHold, mayLead, showing, type StageHold } from '@/modules/product-3d-views-for-shop/lib/stage-hold'
 import { useModelContext } from '@/modules/product-3d-views-for-shop/lib/use-model-context'
 import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { preloadProductAssets } from '@/modules/product-3d-views-for-shop/lib/preload'
@@ -136,14 +137,31 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
   // mid-reconfigure gap keeps showing the model they had settled on.
   const items = visibleItems(data, effectiveProductId, featuredProductIds)
 
+  // Who the stage belongs to - us, or the shopper who has clicked a photograph.
+  // The rule lives in lib/stage-hold.ts; all this holds is where it has got to.
+  // Every pick the module makes goes through `ask` so the hold sees it, and the
+  // effect below feeds it what the host ended up showing.
+  const hold = useRef<StageHold>(freshHold)
+  const ask = useCallback((key: string | null) => {
+    hold.current = asked(hold.current, key)
+    onPick(key)
+  }, [onPick])
+
+  // Fed as it happens rather than worked out at the moment it is needed: the hold
+  // is watching the stage change hands, and by the time a variation change asks
+  // the question the handover it turned on is several renders back.
+  useEffect(() => {
+    hold.current = showing(hold.current, activeKey)
+  }, [activeKey])
+
   // The shopper had a model on the stage and then changed variation to one that
   // does not offer it. Hand the stage back rather than leaving it showing a model
   // the strip no longer lists - the contract requires this, and it is the case
   // that produces "why am I looking at the oak one, I picked walnut".
   const stale = activeKey !== null && !items.some((i) => i.key === activeKey)
   useEffect(() => {
-    if (stale) onPick(null)
-  }, [stale, onPick])
+    if (stale) ask(null)
+  }, [stale, ask])
 
   // Lead the stage with the model instead of waiting for a click: a product that
   // carries a 3D view opens on the thing the shopper can spin, not on a flat photo
@@ -155,22 +173,29 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
     if (ledWithModel.current) return
     ledWithModel.current = true
     const first = items[0]
-    if (activeKey === null && first) onPick(first.key)
+    if (activeKey === null && first) ask(first.key)
     // Read once on mount - the opening view is a one-shot decision, so items,
-    // activeKey and onPick are deliberately not dependencies here.
+    // activeKey and ask are deliberately not dependencies here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Once the shopper has settled on a full variation that carries its own 3D model,
   // lead the stage with that model - it is the exact thing they configured, painted
   // live below, so it should be what they are looking at rather than the product's
-  // generic view. Fires on each variation change (not every render), so a shopper
-  // who then clicks a photo is not fought for the stage.
+  // generic view. Fires on each variation change, not every render.
+  //
+  // Unless the shopper has put a photograph on the stage themselves, in which case
+  // the stage is theirs and stays theirs: they change a finish and get that finish's
+  // first picture, not the model dragged back over the top of it. Clicking a
+  // photograph is how a shopper says "I want to look at the pictures", and answering
+  // every subsequent option change by grabbing the stage back is the module arguing
+  // with them. The 3D thumbnail is still right there when they want it again.
   useEffect(() => {
     if (activeProductId === null) return
+    if (!mayLead(hold.current)) return
     const own = items.find((i) => i.productId === activeProductId)
-    if (own && activeKey !== own.key) onPick(own.key)
-    // Keyed on the chosen variation alone; items/activeKey/onPick are read as the
+    if (own && activeKey !== own.key) ask(own.key)
+    // Keyed on the chosen variation alone; items/activeKey/ask are read as the
     // source, not triggers, and watching them would re-lead on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProductId])
@@ -230,7 +255,7 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
             active={item.key === activeKey}
             thumbClass={thumbClass}
             thumbOnClass={thumbOnClass}
-            onPick={() => onPick(item.key)}
+            onPick={() => ask(item.key)}
           />
         ) : (
           <Thumb3d
@@ -240,7 +265,7 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
             active={item.key === activeKey}
             thumbClass={thumbClass}
             thumbOnClass={thumbOnClass}
-            onPick={() => onPick(item.key)}
+            onPick={() => ask(item.key)}
           />
         ),
       )}
