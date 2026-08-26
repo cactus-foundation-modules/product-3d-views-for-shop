@@ -1,7 +1,7 @@
 'use client'
 
-import type { Object3D, PerspectiveCamera, Scene, WebGLRenderer } from 'three'
-import { addLights, applyEnvironment, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import type { Object3D, PerspectiveCamera, Scene, Texture, WebGLRenderer } from 'three'
+import { addLights, applyEnvironment, applyFabricPaint, applyMaxAnisotropy, disposeModel, disposeRenderer, frameModel, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
@@ -34,6 +34,12 @@ type Entry = {
   pivot: Object3D
   /** What gets disposed, and what the pivot has to be emptied of first. */
   model: Object3D
+  /** This thumbnail's own fabric texture clones. applyFabricPaint hands back a
+   *  per-mount clone of the shared master so each mount can tile it its own way;
+   *  the clone is the mount's to free, and disposeModel deliberately does not
+   *  touch textures (they belong to the cached master). Without this the strip
+   *  leaked one texture clone per painted slot on every option change. */
+  paints: Texture[]
   /**
    * Whether this thumbnail owes a frame. Always true while the strip is spinning, and
    * the only thing that gets drawn when it is not: a still thumbnail is a picture that
@@ -55,6 +61,9 @@ type Entry = {
 
 let renderer: WebGLRenderer | null = null
 let rendererFailed = false
+// Set while a retire is pending (see scheduleRendererRetire). Cleared the moment
+// anything asks for the renderer again.
+let retireTimer: ReturnType<typeof setTimeout> | null = null
 // Set the moment the shared context is lost and cleared once a replacement renderer is
 // standing. Nothing is drawn in between: rendering into a dead context is at best a
 // no-op and at worst a stream of console errors on every frame.
@@ -93,6 +102,11 @@ function prefersReducedMotion(): boolean {
 const CONTEXT_RESTORE_TIMEOUT_MS = 1500
 
 async function getRenderer(): Promise<WebGLRenderer | null> {
+  // Someone wants to draw, so whatever retire was pending is off (see
+  // scheduleRendererRetire). This is the common case on an option change: every
+  // thumbnail unmounts and remounts, and without this the strip would take its own
+  // context down and stand a new one up between the two halves of one repaint.
+  if (retireTimer !== null) { clearTimeout(retireTimer); retireTimer = null }
   if (renderer) return renderer
   // A machine with no working WebGL (an old box, a locked-down browser, a
   // software renderer that gave up) must not be asked again on every thumbnail
@@ -155,8 +169,7 @@ function watchForContextLoss(target: WebGLRenderer): void {
     // Only ever rebuild the renderer that was lost. A teardown may have replaced or
     // dropped it while the browser was thinking about restoring.
     if (renderer !== target) return
-    disposeEnvironment(target)
-    target.dispose()
+    disposeRenderer(target)
     renderer = null
     // A lost context is not a browser that cannot do WebGL, so the one-failure-settles-
     // it latch must not be left set by this path.
@@ -307,10 +320,14 @@ export async function mountThumb(
   // Same paints the stage is showing, or the thumbnail underneath a painted
   // variation shows the file's original colours while the shopper's chosen
   // fabric is only on the big view - the exact "which one is real" confusion the
-  // gallery is meant to avoid. disposeModel below frees these same as any other
-  // material map, painted or not.
+  // gallery is meant to avoid. Each paint hands back a per-mount texture clone,
+  // which is this thumbnail's to free (see the teardown) - disposeModel does not
+  // touch textures, because the ones a model arrives with belong to the cached
+  // master and to every other mount cloned from it.
+  const paints: Texture[] = []
   for (const slot of fabric ?? []) {
-    await applyFabricPaint(model, slot)
+    const tex = await applyFabricPaint(model, slot)
+    if (tex) paints.push(tex)
   }
 
   const camera = new PerspectiveCamera(40, 1, 0.1, 100)
@@ -318,7 +335,7 @@ export async function mountThumb(
   camera.lookAt(0, 0, 0)
 
   const entry: Entry = {
-    canvas, ctx, scene, camera, pivot, model, needsDraw: true,
+    canvas, ctx, scene, camera, pivot, model, paints, needsDraw: true,
     nudgeElapsed: 0, nudgeApplied: 0, nudgeDone: false,
   }
   entries.add(entry)
@@ -327,20 +344,48 @@ export async function mountThumb(
   return () => {
     entries.delete(entry)
     scene.remove(pivot)
+    // This mount's own paint clones, freed before the model they hang off. The
+    // masters they were cloned from stay in the shared texture cache.
+    for (const tex of entry.paints) tex.dispose()
+    entry.paints.length = 0
     disposeModel(model)
-    // The shared renderer outlives any one thumbnail - it is the page's, not
-    // this entry's - but with nothing left to draw there is no reason to hold a
-    // WebGL context open, and a product page with a viewer open wants the
-    // context budget more than an empty strip does.
-    if (entries.size === 0 && renderer) {
-      // Before the renderer goes: the environment was built against it and is
-      // useless once it is gone, but is a GPU allocation the collector can't see.
-      disposeEnvironment(renderer)
-      renderer.dispose()
-      renderer = null
-      if (frame !== null) cancelAnimationFrame(frame)
-      frame = null
-      lastTime = 0
-    }
+    if (entries.size === 0) scheduleRendererRetire()
   }
+}
+
+// How long an empty strip keeps its context before giving it back.
+//
+// The renderer outlives any one thumbnail - it is the page's, not one entry's - but
+// with nothing left to draw there is no reason to hold a WebGL context open, and a
+// product page with a viewer open wants the context budget more than an empty strip
+// does. That much has always been true. What was NOT true is that an empty strip
+// means the strip is finished with: React unmounts every thumbnail before it mounts
+// the replacements, so the count passes through zero on every single option change,
+// and the strip was taking its context down and standing a new one up each time.
+//
+// That is the expensive direction to be wrong in. `WebGLRenderer.dispose()` does not
+// hand the context back (see disposeRenderer), so each of those retired contexts
+// stayed live until the collector got round to the orphaned canvas holding it, and a
+// browser that runs out of its context budget force-loses the OLDEST live context -
+// which on a product page is the stage viewer the shopper is dragging. Measured on a
+// live product page: thirty-nine WebGL contexts opened over about thirty-five option
+// changes, none of them given back at the time.
+//
+// So the retire waits, and any mount inside the window cancels it (see getRenderer).
+// A remount cycle - unmount all, mount all, milliseconds apart - now keeps the one
+// context it started with, and only a strip that is genuinely done gives it back.
+const RENDERER_RETIRE_MS = 10_000
+
+function scheduleRendererRetire(): void {
+  if (retireTimer !== null) return
+  retireTimer = setTimeout(() => {
+    retireTimer = null
+    // Something mounted after all - or the renderer has already gone.
+    if (entries.size > 0 || !renderer) return
+    disposeRenderer(renderer)
+    renderer = null
+    if (frame !== null) cancelAnimationFrame(frame)
+    frame = null
+    lastTime = 0
+  }, RENDERER_RETIRE_MS)
 }

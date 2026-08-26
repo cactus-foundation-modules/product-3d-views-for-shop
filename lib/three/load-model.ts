@@ -782,8 +782,9 @@ export async function applyFabricPaint(
   // MAP has to go with it: left in place it would multiply against the new colour
   // and show the file's original weave tinted, rather than the plain finish the
   // admin asked for. Nothing to return - there is no clone for the caller to own -
-  // and nothing to dispose here either, since the map that was dropped belongs to
-  // the model and disposeModel still frees it.
+  // and nothing to dispose here either: the map that was dropped belongs to the
+  // cached master this model was cloned from, and is not ours to free (see
+  // disposeModel). resetFabricPaint puts it back if the slot is ever unpainted.
   if (paint.colour) {
     const colour = new three.Color(paint.colour)
     model.traverse((child) => {
@@ -1214,30 +1215,72 @@ export function applyMaxAnisotropy(model: Object3D, renderer: WebGLRenderer): vo
 }
 
 /**
- * Release a model's GPU memory. Geometries and textures live in the GPU and are
- * not reachable by the garbage collector, so a shopper flicking through the
- * variations of a product would otherwise pile up every model they had looked at
- * until the tab fell over.
+ * Release the GPU memory ONE MOUNT of a model owns.
+ *
+ * "One mount", not "the model": loadModel hands every caller a clone, and a clone
+ * owns far less than it appears to. SkeletonUtils.clone shares the master's
+ * BufferGeometry by reference, and Material.clone shares the master's textures by
+ * reference - only the materials themselves are per-clone (see loadModel). So the
+ * geometry a mesh points at, and the maps hanging off its materials, belong to the
+ * cached master and to every other clone alive on the page.
+ *
+ * This used to dispose them anyway, which meant a shopper changing an option deleted
+ * the GPU buffers the thumbnail strip and the next clone of the same file were still
+ * using. three re-uploads geometry and an image-backed texture on the next draw, so
+ * it mostly healed itself at the cost of re-uploading a whole model per swap - but a
+ * texture three cannot re-upload (one whose pixels only ever existed on the GPU, or
+ * whose source image is not complete at that instant) binds its 1x1 EMPTY texture
+ * instead, which is opaque black. A model that flashes black for a frame after an
+ * option change is exactly that.
+ *
+ * The masters are held by the module cache for the life of the page either way, so
+ * disposing their geometry and textures never freed anything permanently; it only
+ * ever bought a re-upload. What genuinely belongs to this mount is the cloned
+ * materials, and those are what this frees.
+ *
+ * Fabric paint clones (see applyFabricPaint) belong to whoever asked for the paint -
+ * applyFabricPaint hands the Texture back for exactly that reason - and are disposed
+ * by the caller, not here.
  */
 export function disposeModel(model: Object3D): void {
   model.traverse((child) => {
-    const mesh = child as Object3D & {
-      geometry?: { dispose?: () => void }
-      material?: unknown
-    }
-    mesh.geometry?.dispose?.()
+    const mesh = child as Object3D & { material?: unknown }
     const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
     for (const material of materials) {
-      const m = material as { dispose?: () => void } & Record<string, unknown>
-      // A material's texture maps are separate GPU allocations and are not freed
-      // by disposing the material itself.
-      for (const value of Object.values(m)) {
-        const maybeTexture = value as { isTexture?: boolean; dispose?: () => void } | null
-        if (maybeTexture && typeof maybeTexture === 'object' && maybeTexture.isTexture) maybeTexture.dispose?.()
-      }
+      const m = material as { dispose?: () => void }
       m.dispose?.()
     }
   })
+}
+
+/**
+ * Retire a renderer and everything keyed to it.
+ *
+ * `WebGLRenderer.dispose()` frees three's own bookkeeping but deliberately does NOT
+ * give the WebGL context back - that needs WEBGL_lose_context, which is what
+ * forceContextLoss asks for. Without it a page that stands a renderer up and takes
+ * it down again (the thumbnail strip on every option change, the stage viewer on a
+ * lost context) leaves one live context behind each time, held only by an orphaned
+ * canvas nobody references. Browsers cap live contexts at somewhere around sixteen
+ * and force-lose the OLDEST to make room, which on a product page is the stage
+ * viewer the shopper is looking at.
+ *
+ * The environment goes first: it is a PMREM render target built against this very
+ * renderer, it has no CPU-side pixels to re-upload from, and it is not something the
+ * garbage collector can see.
+ *
+ * The canvas is finished with afterwards either way - a lost context cannot be
+ * restored by asking, so a caller that wants to draw again needs a fresh canvas.
+ */
+export function disposeRenderer(renderer: WebGLRenderer): void {
+  disposeEnvironment(renderer)
+  try {
+    renderer.forceContextLoss()
+  } catch {
+    // A context that has already gone (the browser took it, or the extension is
+    // absent) is exactly the state this is trying to reach. Nothing to report.
+  }
+  renderer.dispose()
 }
 
 // The environment is generated once per renderer and shared by every scene it

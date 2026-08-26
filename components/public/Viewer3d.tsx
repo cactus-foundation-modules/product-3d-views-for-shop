@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeEnvironment, disposeModel, frameModel, loadModel, prefetchTexture, resetFabricPaint, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
+import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeModel, disposeRenderer, frameModel, loadModel, prefetchTexture, resetFabricPaint, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { detectArSupport, bakeUsdzUrl, startWebXrAr, type ArKind } from '@/modules/product-3d-views-for-shop/lib/three/ar'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
@@ -111,6 +111,15 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // salvage and no half-measure worth attempting - and the carried view means the
   // shopper gets their angle and zoom back on the other side of it.
   const [generation, setGeneration] = useState(0)
+  // The canvas and the WebGL context on it, as one identity. A context's
+  // attributes are fixed the moment it is created - `canvas.getContext` ignores
+  // them ever after - so anything renderer-level has to take a fresh canvas with
+  // it rather than a fresh renderer over the old one. `generation` is a lost
+  // context; `antialias` is the one renderer-level setting a live page can change,
+  // which only ever happens in the admin's preview (a storefront's settings are
+  // resolved server-side and fixed for the life of the page, so this string never
+  // changes there). Everything keyed on the canvas keys on this.
+  const rendererKey = `${generation}:${settings.antialias ? 'aa' : 'plain'}`
   // Two separate latches, because the hint and the reset button ask different
   // questions. `touched` is "have they ever taken hold of this", and never goes
   // back - the drag hint has made its point and re-showing it would nag someone
@@ -173,9 +182,18 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // hoisting the whole WebGL setup into React state.
   const resetRef = useRef<(() => void) | null>(null)
 
-  // The live renderer, kept only so the brightness effect below can reach it.
-  // Null before the first build finishes and after a dispose.
+  // The live renderer. It belongs to the CANVAS rather than to the model on it, so
+  // it is built once per canvas and reused by every model that follows - see the
+  // build effect and the retire effect that pairs with it. Null before the first
+  // build and after the canvas it was built on has gone.
   const rendererRef = useRef<ThreeRenderer | null>(null)
+
+  // Which build owns the shared paint bookkeeping (appliedRef/paintedRef below).
+  // Bumped by every run of the build effect; a build that finds the number has moved
+  // on has been superseded and must not touch anything the newer one is using. This
+  // is what stops a slow, abandoned build clearing the maps its replacement has
+  // already started filling - and disposing the textures in them.
+  const buildTokenRef = useRef(0)
 
   // The live controls, kept only so the wheel can be switched on the moment the
   // shopper claims the stage - same reason as rendererRef, rather than rebuilding
@@ -263,8 +281,8 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
       canvas.removeEventListener('webglcontextlost', onLost)
       canvas.removeEventListener('webglcontextrestored', rebuild)
     }
-    // Re-attached to each new canvas element the generation bump mounts.
-  }, [generation])
+    // Re-attached to each new canvas element the rebuild mounts.
+  }, [rendererKey])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -275,6 +293,11 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     let frame: number | null = null
     let dispose: (() => void) | null = null
     let disposeShadow: (() => void) | null = null
+    // This run's claim on the shared paint bookkeeping. A build that finds the
+    // number has moved on has been superseded and leaves the newer one's state
+    // alone - see buildTokenRef.
+    const token = ++buildTokenRef.current
+    const isCurrent = (): boolean => buildTokenRef.current === token
     setStatus('loading')
     // Read here, synchronously after the previous viewer's dispose captured it -
     // the model load inside build() can take seconds, and the freshness window is
@@ -293,10 +316,31 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
       const model = await loadModel(item.url, item.format)
       if (cancelled) return
 
-      const renderer = new WebGLRenderer({ canvas: canvas!, alpha: true, antialias: settings.antialias })
-      // Lend this context to the KTX2 transcoder's one-off capability check, so it does
-      // not open a WebGL context of its own to ask a question this one can answer.
-      warmKtx2Support(renderer)
+      // One renderer per canvas, not one per model.
+      //
+      // This used to build a fresh WebGLRenderer on every model change, which is
+      // the same canvas element every time - and `canvas.getContext` hands back the
+      // context that canvas ALREADY has, ignoring the attributes asked for. So an
+      // option change stood a second three renderer up over the first one's live
+      // context, and a third over that, and so on: twenty-three of them over one
+      // context in a single measured visit. three does not support that. Retiring
+      // one of them runs `bindingStates.dispose()` (which unbinds the vertex array
+      // another may be drawing with) and `programCache.dispose()` against the shared
+      // context, while the survivor's own state cache carries on believing nothing
+      // happened - which is a frame or two of whatever the driver has lying about,
+      // and the model appearing to flicker to something wrong and back.
+      //
+      // Reusing the renderer also means the studio environment (a PMREM render, and
+      // not cheap) is generated once per canvas instead of once per option change.
+      // The renderer is retired with its canvas instead - see the effect below.
+      let renderer = rendererRef.current
+      if (!renderer) {
+        renderer = new WebGLRenderer({ canvas: canvas!, alpha: true, antialias: settings.antialias })
+        // Lend this context to the KTX2 transcoder's one-off capability check, so it does
+        // not open a WebGL context of its own to ask a question this one can answer.
+        warmKtx2Support(renderer)
+        rendererRef.current = renderer
+      }
       // pixelRatioCap caps DOWNWARD (never above the device's own ratio);
       // superSampling then multiplies UP, letting the viewer render above screen
       // resolution and downsample. That is what tames the fabric-weave shimmer a
@@ -304,13 +348,46 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
       // anisotropy do not, since this is shaded-surface aliasing, not silhouette
       // or grazing-angle. superSampling defaults to 1, so this stays identical to
       // the old single line until the owner turns it up.
+      //
+      // Set on every build rather than only on the one that made the renderer:
+      // idempotent, and it keeps a reused renderer exactly where a fresh one would
+      // have started.
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, settings.pixelRatioCap) * settings.superSampling)
-      // Everything from here to the dispose assignment builds on a live WebGL
-      // context. A throw partway (addLights, frameModel, addShadowCatcher, or a
-      // machine that loses its context) would otherwise leave that context open
-      // with no `dispose` for the cleanup to call - and a leaked context is the
-      // one that eventually takes the thumbnails down. So on any failure, free the
-      // context and the model here and rethrow to the .catch that sets "failed".
+
+      // This build's own fabric paint clones, held here until the build is past the
+      // point where it can still be superseded. They used to go straight into the
+      // shared refs, so a build abandoned mid-paint cleared the maps its replacement
+      // had already begun filling and disposed the textures in them - a live viewer
+      // losing the very colours it had just painted.
+      const localApplied = new Map<string, Texture>()
+      const localPainted = new Set<string>()
+
+      // Everything a superseded or failed build hands back. The renderer is
+      // deliberately NOT in here: it belongs to the canvas and outlives every model
+      // that passes over it. Nor is the model's geometry or its file textures -
+      // those belong to the cached master (see disposeModel).
+      const abandon = (): void => {
+        disposeShadow?.()
+        disposeShadow = null
+        for (const [name, tex] of localApplied) {
+          // Only if the map still holds OUR clone: a newer build may have painted
+          // the same slot already, and that one is not ours to take away.
+          if (appliedRef.current.get(name) === tex) appliedRef.current.delete(name)
+          tex.dispose()
+        }
+        if (isCurrent()) {
+          for (const name of localPainted) paintedRef.current.delete(name)
+          if (modelRef.current === model) { modelRef.current = null; builtUrlRef.current = null }
+        }
+        localApplied.clear()
+        localPainted.clear()
+        disposeModel(model)
+      }
+
+      // A throw partway (addLights, frameModel, addShadowCatcher, or a machine that
+      // loses its context) leaves this build with no `dispose` for the cleanup to
+      // call, so it hands its own work back here and rethrows to the .catch that
+      // sets "failed".
       try {
         // NoToneMapping is the renderer's own default and matches how this viewer
         // has always drawn; the other two are the curves a model authored elsewhere
@@ -322,14 +399,15 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         }[settings.toneMapping]
         renderer.toneMapping = toneMap
         renderer.toneMappingExposure = settings.exposure
-        rendererRef.current = renderer
 
         const scene = new Scene()
         const keyLight = await addLights(scene, renderer, settings)
+        if (cancelled) { abandon(); return }
         // The pivot, not the model: frameModel centres the model inside it, so
         // OrbitControls' target (the origin) is the middle of the model rather
         // than whatever point its file happened to be authored around.
         const pivot = await frameModel(scene, model)
+        if (cancelled) { abandon(); return }
         // Filter textures at the GPU's best, or a fine weave washes to a flat
         // colour the moment the surface tilts away from the camera - which, on a
         // model that turns, is most of the time. Needs the renderer for its ceiling.
@@ -339,21 +417,22 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         // later colour change on the same model url is handled in place by the
         // effect below; this first paint is also the one a headrest switch rebuilds
         // through, since that changes the model url and re-runs this effect.
-        const applied = appliedRef.current
-        const painted = paintedRef.current
+        //
+        // applyFabricPaint waits on the swatch itself, which on a cold cache is a
+        // network round trip - so the shopper has whole seconds in which to change
+        // their mind here. Checked on every pass rather than only at the end.
         for (const slot of fabric?.slots ?? []) {
           const tex = await applyFabricPaint(model, slot)
-          painted.add(slot.materialName)
-          if (tex) applied.set(slot.materialName, tex)
+          if (tex) localApplied.set(slot.materialName, tex)
+          localPainted.add(slot.materialName)
+          if (cancelled) { abandon(); return }
         }
 
-        if (cancelled) {
-          for (const tex of applied.values()) tex.dispose()
-          applied.clear()
-          painted.clear()
-          renderer.dispose(); disposeModel(model); return
-        }
-        // Reachable by the repaint effect only now the model is built and painted.
+        if (cancelled) { abandon(); return }
+        // Past the point where this build can be quietly dropped: its paints become
+        // the viewer's, and the repaint effect can find the model.
+        for (const [name, tex] of localApplied) appliedRef.current.set(name, tex)
+        for (const name of localPainted) paintedRef.current.add(name)
         modelRef.current = model
         builtUrlRef.current = item.url
         // Wakes the repaint effect now the model exists, so a fabric fetch that
@@ -398,6 +477,12 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
             renderer.shadowMap.autoUpdate = false
             renderer.shadowMap.needsUpdate = true
           }
+          // The last await before `dispose` exists. Without this check a shopper who
+          // changed option during it left a build that went on to start its own
+          // render loop and attach its own controls to a canvas the next build was
+          // already using - two loops drawing two models into one canvas, which is
+          // the flicker between models nobody could reproduce on demand.
+          if (cancelled) { abandon(); return }
         }
 
         const camera = new PerspectiveCamera(settings.fieldOfView, 1, 0.1, 100)
@@ -939,6 +1024,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           invalidateRef.current = null
           controlsRef.current = null
           disposeShadow?.()
+          disposeShadow = null
           scene.remove(pivot)
           // This viewer's own fabric clones, freed before the model they hang off.
           // The masters they were cloned from stay in the shared texture cache.
@@ -947,34 +1033,33 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           // Cleared with them: the model these names refer to is about to be disposed,
           // and the next build clones fresh materials at the file's own look.
           paintedRef.current.clear()
+          localApplied.clear()
+          localPainted.clear()
           modelRef.current = null
           builtUrlRef.current = null
           resetRef.current = null
           parkLoopRef.current = null
           unparkLoopRef.current = null
-          rendererRef.current = null
+          // The renderer and its environment stay: they belong to the canvas, and the
+          // next model is about to be drawn with them. They go when the canvas does -
+          // see the retire effect below.
           disposeModel(model)
-          disposeEnvironment(renderer)
-          // Frees the WebGL context itself. Without it, a shopper flicking between
-          // variations leaks one context per model until the browser starts killing
-          // the oldest - which takes the thumbnails out with it.
-          renderer.dispose()
         }
       } catch (err) {
         // Reached only when build threw before assigning `dispose`, so the cleanup
         // cannot free any of this - do it here. Idempotent enough to be safe: a
         // shadow that was never added leaves disposeShadow null, and three's
         // dispose() calls tolerate being the last thing to touch a resource.
-        disposeShadow?.()
-        for (const tex of appliedRef.current.values()) tex.dispose()
-        appliedRef.current.clear()
-        paintedRef.current.clear()
-        rendererRef.current = null
-        invalidateRef.current = null
-        controlsRef.current = null
-        disposeModel(model)
-        disposeEnvironment(renderer)
-        renderer.dispose()
+        //
+        // The renderer is left standing on purpose. It is the canvas's, not this
+        // build's, and throwing it away would take the context with it - which on a
+        // transient failure (one model that will not parse) costs the shopper the
+        // whole viewer rather than one model.
+        if (isCurrent()) {
+          invalidateRef.current = null
+          controlsRef.current = null
+        }
+        abandon()
         throw err
       }
     }
@@ -989,10 +1074,31 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
     // fabric is read here for the FIRST paint only; a colour change on the same
     // model is handled by the repaint effect below without rebuilding the context,
     // and a model change (headrest) alters item.url, which does re-run this.
-    // generation is bumped only by a lost WebGL context, which rebuilds everything onto
-    // the fresh canvas React mounts for it.
+    // rendererKey changes only when the canvas itself is replaced - a lost WebGL
+    // context, or an antialias change in the admin preview - which rebuilds
+    // everything onto the fresh canvas React mounts for it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.url, item.format, generation])
+  }, [item.url, item.format, rendererKey])
+
+  // Retiring the renderer, and with it the WebGL context.
+  //
+  // Declared after the build effect on purpose: React runs cleanups in declaration
+  // order, so the build has already taken its model, shadow and controls down by the
+  // time this runs. It fires only when the CANVAS goes - a lost context bumping
+  // `generation`, or the viewer unmounting because the shopper picked a photograph -
+  // and never on a model change, which is the whole point of reusing the renderer.
+  //
+  // disposeRenderer, not renderer.dispose(): three's own dispose keeps the WebGL
+  // context, and a page that quietly banks one context per teardown eventually has
+  // the browser force-lose the oldest live one to make room. See load-model.ts.
+  useEffect(() => {
+    return () => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      rendererRef.current = null
+      disposeRenderer(renderer)
+    }
+  }, [rendererKey])
 
   // Brightness, pushed straight at the live renderer rather than rebuilt.
   //
@@ -1105,7 +1211,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   useEffect(() => {
     const controls = controlsRef.current
     if (controls) controls.enableZoom = interactive
-  }, [interactive, builtUrl, generation])
+  }, [interactive, builtUrl, rendererKey])
 
   // Which AR route this device has, decided once when the viewer mounts and
   // re-decided if the owner's AR toggle changes. Pure device capability - it does
@@ -1218,11 +1324,14 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           own navigation before the page sees them, so the keys below serve sighted
           keyboard users and alternative-input devices rather than screen reader users,
           who still reach every photograph in the strip below by the usual means.
-          `key` remounts the element outright when a lost WebGL context forces a
-          rebuild, so the new renderer gets a genuinely fresh context rather than
-          inheriting whatever state the dead one left behind. */}
+          `key` remounts the element outright whenever the context itself has to be
+          replaced (a lost one, or a renderer-level setting change in the admin
+          preview), so the new renderer gets a genuinely fresh context rather than
+          inheriting whatever state the old one left behind. A model change does NOT
+          replace it: the renderer is reused, which is what keeps the picture on
+          screen while the next model loads. */}
       <canvas
-        key={generation}
+        key={rendererKey}
         ref={canvasRef}
         className="p3d-stage-canvas"
         tabIndex={0}
