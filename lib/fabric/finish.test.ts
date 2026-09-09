@@ -20,6 +20,16 @@ describe('detectGloss', () => {
     expect(detectGloss({ label: 'Leatherette Navy' })).toBeGreaterThan(0)
   })
 
+  it('counts vinyl, the same coated surface under another name', () => {
+    expect(detectGloss({ label: 'Vinyl - Black' })).toBeGreaterThan(0)
+    expect(detectGloss({ label: 'anti-microbial VINYL' })).toBeGreaterThan(0)
+    expect(detectGloss({ label: 'Blue', textureUrl: 'https://cdn.test/media/shop/blue-vinyl.webp' })).toBeGreaterThan(0)
+  })
+
+  it('shines a vinyl exactly as much as a leather, being the same surface', () => {
+    expect(detectGloss({ label: 'Vinyl Navy' })).toBe(detectGloss({ label: 'Leather Navy' }))
+  })
+
   it('finds it in the picture filename, for a value labelled by colour alone', () => {
     expect(detectGloss({ label: 'Black', textureUrl: 'https://cdn.test/media/shop/black-leather.webp' })).toBeGreaterThan(0)
   })
@@ -52,5 +62,6 @@ describe('detectGloss', () => {
     // path turns this straight into a roughness, so a runaway value here is a seat
     // that reflects the room.
     expect(detectGloss({ label: 'Leather' })).toBeLessThan(0.8)
+    expect(detectGloss({ label: 'Vinyl' })).toBeLessThan(0.8)
   })
 })
