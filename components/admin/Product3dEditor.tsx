@@ -22,6 +22,7 @@ import { Model3dPickerModal } from '@/modules/product-3d-views-for-shop/componen
 import { ModelContextTag } from '@/modules/product-3d-views-for-shop/components/admin/ModelContextTag'
 import { FabricConfigPanel } from '@/modules/product-3d-views-for-shop/components/admin/FabricConfigPanel'
 import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
+import { usePreviewModel } from '@/modules/product-3d-views-for-shop/lib/use-preview-model'
 
 const css = `
 .p3d-ed{display:grid;gap:1.25rem}
@@ -255,9 +256,6 @@ function ViewerSettingsPanel({
   const [config, setConfig] = useState<P3dProductConfig | null>(null)
   const [site, setSite] = useState<P3dConfig | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // One chosen value per option id. Empty string means "not chosen", which reads
-  // as the product's own model rather than as an error.
-  const [choice, setChoice] = useState<Record<string, string>>({})
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -295,93 +293,13 @@ function ViewerSettingsPanel({
 
   useEffect(() => () => { if (saveTimer.current) clearTimeout(saveTimer.current) }, [])
 
-  // The product's own models first: they are what a shopper sees before choosing
-  // anything, so they are what the preview rests on until a combination is picked.
-  const ownModels = useMemo(() => treeModels.filter((m) => m.productId === productId), [treeModels, productId])
-  const fallbackModel = ownModels[0] ?? treeModels[0] ?? null
-
-  // Which option each value belongs to, so a variation's stored value ids can be
-  // laid back out as one choice per dropdown.
-  const optionOfValue = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const option of options) for (const value of option.values) map.set(value.id, option.id)
-    return map
-  }, [options])
-
-  // The dropdowns start on whatever the preview already shows, so opening the tab
-  // and then changing one option is a one-click move rather than a re-pick of the
-  // lot. Empty for the parent's own model, which belongs to no combination.
-  const defaultChoice = useMemo(() => {
-    const target = targets.find((t) => t.productId === fallbackModel?.productId)
-    const seed: Record<string, string> = {}
-    for (const valueId of target?.valueIds ?? []) {
-      const optionId = optionOfValue.get(valueId)
-      if (optionId) seed[optionId] = valueId
-    }
-    return seed
-  }, [targets, fallbackModel?.productId, optionOfValue])
-
-  const selection = useMemo(() => ({ ...defaultChoice, ...choice }), [defaultChoice, choice])
-
-  // The variation the chosen combination names, and the model hanging off it. A
-  // part-filled combination matches nothing on purpose: half a choice is not a
-  // variation, and guessing which of the matching ones was meant would show the
-  // admin a model they did not ask for.
-  const chosenTarget = useMemo(() => {
-    if (options.length === 0) return null
-    const wanted = options.map((o) => selection[o.id] ?? '')
-    if (wanted.some((v) => !v)) return null
-    return targets.find((t) => t.valueIds.length > 0 && wanted.every((v) => t.valueIds.includes(v))) ?? null
-  }, [options, selection, targets])
-
-  const chosenModel = useMemo(
-    () => (chosenTarget ? treeModels.find((m) => m.productId === chosenTarget.productId) ?? null : null),
-    [chosenTarget, treeModels],
-  )
-
-  // A chosen combination with no model of its own falls back to the product's own
-  // model rather than to an empty stage: the brightness is a property of the
-  // light, and something lit is worth more than nothing.
-  const previewModel = chosenModel ?? ownModels[0] ?? fallbackModel
-  const showPicker = options.length > 0 && targets.length > 1
-
-  // A variation's model on a material-configured product carries no colours of its
-  // own: the shopper's chosen fabrics are painted on at view time, and drawing the
-  // file raw shows an unpainted shell rather than the product. So the preview asks
-  // the same public resolver the storefront does and paints the same way - without
-  // this, picking an option showed a model with nothing on it.
-  //
-  // Only a chosen combination is resolved. The parent's own model is what a shopper
-  // sees before choosing anything, which is to say unpainted, so there is nothing
-  // to ask. The chosen VARIATION is asked about even where it has no model row of
-  // its own, because the resolver falls back to the parent's model and paints that
-  // - exactly what the storefront shows for such a combination.
-  //
-  // The variation it was resolved for is kept beside it, so a bundle still in
-  // flight can never paint the previous combination's fabrics onto the new model,
-  // nor name the previous combination's file.
-  const previewChildId = chosenTarget?.productId ?? null
-  const [resolved, setResolved] = useState<{ childId: string; bundle: FabricBundle | null } | null>(null)
-  const bundle = resolved && resolved.childId === previewChildId ? resolved.bundle : null
-
-  useEffect(() => {
-    // Nothing to resolve for the parent's own model. The stale bundle is left
-    // where it is rather than cleared: the childId guard above already refuses to
-    // read it, and clearing it here would be a setState in the effect body for a
-    // value nobody can see.
-    if (!previewChildId) return
-    let cancelled = false
-    const childId = previewChildId
-    const url = `/api/m/product-3d-views-for-shop/fabric/${encodeURIComponent(previewChildId)}`
-      + `?parent=${encodeURIComponent(productId)}&child=${encodeURIComponent(previewChildId)}`
-    fetch(url)
-      .then((r) => (r.ok ? (r.json() as Promise<FabricBundle | null>) : null))
-      // A product with no material config resolves to null, and the model shows
-      // unpainted - which for that product is exactly right.
-      .then((data) => { if (!cancelled) setResolved({ childId, bundle: data }) })
-      .catch(() => { if (!cancelled) setResolved({ childId, bundle: null }) })
-    return () => { cancelled = true }
-  }, [productId, previewChildId])
+  // Which model the preview shows, and what to paint on it. Shared with the AI
+  // photo panel's view capture, which asks the identical question - see
+  // lib/use-preview-model.
+  const {
+    selection, choose, showPicker, chosenTarget, chosenModel, previewModel,
+    item: previewItem, fabric: previewFabric, bundle,
+  } = usePreviewModel({ productId, models: treeModels, targets, options })
 
   // The site's own lighting with this product's brightness dropped over the top,
   // which is precisely what a shopper on this product's page would get. Memoised
@@ -390,34 +308,6 @@ function ViewerSettingsPanel({
   const previewSettings = useMemo(
     () => (site ? { ...site, exposure: config?.exposure ?? site.exposure } : null),
     [site, config?.exposure],
-  )
-
-  // Stable across a drag: it keys the preview only by which model is on the
-  // stage, so changing the brightness never remounts the viewer.
-  //
-  // The resolver has the last word on which file a combination draws where it
-  // answered: a size can swap the model out from under a colour, and the row this
-  // panel picked is only where the search started.
-  const previewItem = useMemo(
-    () =>
-      previewModel
-        ? {
-            key: previewModel.id,
-            productId: previewModel.productId,
-            url: bundle?.modelUrl ?? previewModel.url,
-            format: bundle?.format ?? previewModel.format,
-            label: `${formatLabel(bundle?.format ?? previewModel.format)} preview`,
-          }
-        : null,
-    [previewModel, bundle?.modelUrl, bundle?.format],
-  )
-
-  // Handed to the viewer only once the paints for THIS variation have landed.
-  // Passing empty slots meanwhile would tell the viewer there is nothing to paint,
-  // which is the unpainted shell the admin just reported as blank.
-  const previewFabric = useMemo(
-    () => (bundle && bundle.slots.length > 0 ? { slots: bundle.slots } : undefined),
-    [bundle],
   )
 
   if (!config || !site || !previewSettings || !previewItem || !previewModel) return null
@@ -472,7 +362,7 @@ function ViewerSettingsPanel({
                     id={`p3d-pick-${option.id}`}
                     className="p3d-ed-pick-select"
                     value={selection[option.id] ?? ''}
-                    onChange={(e) => setChoice({ ...selection, [option.id]: e.target.value })}
+                    onChange={(e) => choose({ ...selection, [option.id]: e.target.value })}
                   >
                     <option value="">Any</option>
                     {option.values.map((value) => (

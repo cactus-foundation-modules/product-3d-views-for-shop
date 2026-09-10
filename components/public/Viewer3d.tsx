@@ -93,7 +93,22 @@ const KEY_ZOOM = 1.15
 // where the restore path would have been tidier.
 const CONTEXT_RESTORE_TIMEOUT_MS = 1500
 
-export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dItem; settings: P3dConfig; fabric?: FabricPaints; fabricPending?: boolean }) {
+// How an admin screen takes a still of whatever is currently on the stage.
+//
+// A ref rather than a callback prop: the function has to reach into the build's
+// own closure (the renderer, the scene and the camera all live there and nowhere
+// else), and a ref is the one handle that can be filled in from inside a build
+// and read from outside it without dragging the whole WebGL setup into React
+// state. Null whenever there is no live build to capture from.
+//
+// It renders on demand and reads the canvas back synchronously, because that is
+// the only moment the drawing buffer is guaranteed to still hold the picture -
+// the browser clears it at the next composite. A viewer handed one of these also
+// takes `preserveDrawingBuffer`, which makes the read safe rather than merely
+// likely; the storefront passes no ref and pays nothing for it.
+export type Viewer3dCapture = { current: (() => string | null) | null }
+
+export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: { item: P3dItem; settings: P3dConfig; fabric?: FabricPaints; fabricPending?: boolean; captureRef?: Viewer3dCapture }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [status, setStatus] = useState<Status>('loading')
@@ -119,7 +134,10 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
   // which only ever happens in the admin's preview (a storefront's settings are
   // resolved server-side and fixed for the life of the page, so this string never
   // changes there). Everything keyed on the canvas keys on this.
-  const rendererKey = `${generation}:${settings.antialias ? 'aa' : 'plain'}`
+  // `capture` joins them for the same reason antialias did: preserveDrawingBuffer
+  // is fixed when the context is created and cannot be changed on a live one.
+  const capturing = !!captureRef
+  const rendererKey = `${generation}:${settings.antialias ? 'aa' : 'plain'}:${capturing ? 'keep' : 'drop'}`
   // Two separate latches, because the hint and the reset button ask different
   // questions. `touched` is "have they ever taken hold of this", and never goes
   // back - the drag hint has made its point and re-showing it would nag someone
@@ -335,7 +353,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
       // The renderer is retired with its canvas instead - see the effect below.
       let renderer = rendererRef.current
       if (!renderer) {
-        renderer = new WebGLRenderer({ canvas: canvas!, alpha: true, antialias: settings.antialias })
+        renderer = new WebGLRenderer({ canvas: canvas!, alpha: true, antialias: settings.antialias, preserveDrawingBuffer: capturing })
         // Lend this context to the KTX2 transcoder's one-off capability check, so it does
         // not open a WebGL context of its own to ask a question this one can answer.
         warmKtx2Support(renderer)
@@ -975,6 +993,18 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         // the one renderer would fight over it. Unpark re-bases the clock and asks
         // for a frame, and only restarts the loop if the stage is actually on
         // screen, so it does not resurrect a loop the IntersectionObserver parked.
+        // A still of the stage exactly as it stands. Drawn first rather than
+        // trusting whatever the last frame left behind: the loop only renders when
+        // something has changed, so a model sitting still has not been drawn for
+        // some time and the buffer's contents are nobody's business but the
+        // compositor's.
+        if (captureRef) {
+          captureRef.current = () => {
+            renderer.render(scene, camera)
+            return canvas!.toDataURL('image/png')
+          }
+        }
+
         parkLoopRef.current = () => {
           if (frame !== null) { cancelAnimationFrame(frame); frame = null }
         }
@@ -1040,6 +1070,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
           resetRef.current = null
           parkLoopRef.current = null
           unparkLoopRef.current = null
+          if (captureRef) captureRef.current = null
           // The renderer and its environment stay: they belong to the canvas, and the
           // next model is about to be drawn with them. They go when the canvas does -
           // see the retire effect below.
@@ -1058,6 +1089,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending }: { item: P3dI
         if (isCurrent()) {
           invalidateRef.current = null
           controlsRef.current = null
+          if (captureRef) captureRef.current = null
         }
         abandon()
         throw err

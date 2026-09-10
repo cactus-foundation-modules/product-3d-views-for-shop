@@ -20,6 +20,7 @@ Requires the [shop](https://github.com/cactus-foundation-modules/shop) module (v
 - **Show a variation's model up front.** Tick **3D up front** against a variation on the Variations tab and its model joins the opening view as well, behind the product's own - useful where the range's best model belongs to one variation, or where the product has no model of its own at all. It leaves again the moment the shopper picks any option. A neighbouring **Image up front** box does the same for that variation's first photograph, independently; both live in shop-variations.
 - **No duplicates.** Where several variations share one model file (a size run of the same shape, typically), the gallery shows it once rather than once per variation.
 - **Filed with the pictures.** Uploads land in the media library under `Shop / <category> / <product> / 3d`, beside the product's own images rather than in a parallel tree.
+- **Reference views for AI photography.** With the [google-ai-studio](https://github.com/cactus-foundation-modules/google-ai-studio) module installed (v0.1.1 or newer), a **From 3D models** button appears in the AI photo section of the product's Images tab. It opens this product's model with a dropdown per option - put it in the right colour and size, and its materials paint on exactly as a shopper would see them - and every press of **Create view** sends the current angle over as another reference picture. Turn the model and press it again for as many angles as the job needs. The views are never saved anywhere: they exist for the length of the job and go with it.
 
 ## Supported formats
 
@@ -45,6 +46,13 @@ The gallery is not owned by one module. On a plain product it is shop's own; on 
 A variation is a hidden child product row, so a model is only ever attached to a product id - this module holds no notion of options or variants, and reads shop-variations' tables only to name and list a product's variations, and only when it is installed. The 3D column on the Variations tab is contributed through shop-variations' generic `shop-variations.variant-columns` point and lives entirely here: shop-variations leaves a gap in each row and knows nothing about what fills it.
 
 Models go **straight from the browser to the media Worker** and never through the site's own server. This is not a nicety. A form upload is capped at roughly 4.5 MB by the hosting platform, which rejects the request before any application code runs and answers with a 413 whose body is not JSON - so for every model anyone would actually sell, the old upload could report nothing more useful than "Upload failed". Where a provider cannot take a direct upload (Cloudinary, ImageKit, Vercel Blob, Supabase), the file falls back to that path and the editor says so plainly, ceiling and remedy included, rather than letting the request vanish.
+
+The **From 3D models** picker works the same way in reverse: google-ai-studio hosts a
+`google-ai-studio.reference-image-sources` point, this module contributes a picker to it, and the
+finished pictures cross as a cancelable `cactus-ai-reference-image` window event carrying a data
+url. Neither module imports the other, neither requires the other, and either can be released
+first - without the AI module the picker is never rendered, and without this one the button never
+appears.
 
 Every auto-rotating thumbnail on a page draws through **one shared WebGL context**, blitted into per-thumbnail 2D canvases. A context each would be simpler and would break: browsers cap live contexts at roughly 8-16 per page and silently kill the oldest past that, which on a product with a dozen variations means thumbnails going blank on someone else's machine.
 
