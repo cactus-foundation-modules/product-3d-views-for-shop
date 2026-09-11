@@ -38,7 +38,7 @@
 // which is why it carries its own 'use client' - see modules/shop/lib/card-media.ts.
 
 import { useEffect, useId, useMemo, useState } from 'react'
-import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
+import dynamic from 'next/dynamic'
 import { ViewerChromeStyle, CardChromeStyle } from '@/modules/product-3d-views-for-shop/components/public/P3dChrome'
 import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
 import { buildSlides, initialIndex } from '@/modules/product-3d-views-for-shop/lib/card-slides'
@@ -46,6 +46,27 @@ import type { CardOverlayProps } from '@/modules/shop/lib/card-media'
 import type { P3dCardPayload, P3dCardModel } from '@/modules/product-3d-views-for-shop/lib/types'
 
 const OPEN_EVENT = 'p3d-card-open'
+
+// The viewer arrives when a shopper taps the badge, not when the page does.
+//
+// three.js was always behind Viewer3d's own dynamic imports, so the note above is
+// half right - but Viewer3d ITSELF was a static import, and a static import is a
+// bundler edge. Its own code came down eagerly on every page carrying a product
+// card: measured on the live site, 180 KB compressed (700 KB parsed) fetched and
+// parsed by every visitor to a category page or a homepage with a grid on it, for
+// a control most of them never touch.
+//
+// ssr:false because there is no useful server render of a WebGL canvas, and it
+// only ever mounts after a click anyway.
+const Viewer3d = dynamic(
+  () => import('@/modules/product-3d-views-for-shop/components/public/Viewer3d').then((m) => m.Viewer3d),
+  {
+    ssr: false,
+    // The same spinner the stage shows while a model's fabric is resolving, so
+    // fetching the viewer and fetching what it draws look like one wait.
+    loading: () => <div className="p3d-card-loading"><span className="p3d-material-spinner" aria-hidden="true" /></div>,
+  },
+)
 
 
 function CubeIcon() {

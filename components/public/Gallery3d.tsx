@@ -11,13 +11,22 @@
 // in modules/shop/lib/gallery-media.ts.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
 import { asked, freshHold, mayLead, showing, type StageHold } from '@/modules/product-3d-views-for-shop/lib/stage-hold'
 import { useModelContext } from '@/modules/product-3d-views-for-shop/lib/use-model-context'
 import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { preloadProductAssets } from '@/modules/product-3d-views-for-shop/lib/preload'
 import { mountThumb } from '@/modules/product-3d-views-for-shop/lib/three/thumb-stage'
-import { Viewer3d } from '@/modules/product-3d-views-for-shop/components/public/Viewer3d'
+// Loaded on demand, for the same reason the card overlay loads it on demand: a
+// static import is a bundler edge, so Viewer3d's own 180 KB came down with the
+// product page whether or not the shopper ever opened a model. The thumbnail
+// strip's small previews are a separate, much lighter path (mountThumb) and are
+// unaffected - what waits for a click is the full viewer.
+const Viewer3d = dynamic(
+  () => import('@/modules/product-3d-views-for-shop/components/public/Viewer3d').then((m) => m.Viewer3d),
+  { ssr: false, loading: () => <div className="p3d-stage-loading"><span className="p3d-material-spinner" aria-hidden="true" /></div> },
+)
 import { ViewerChromeStyle } from '@/modules/product-3d-views-for-shop/components/public/P3dChrome'
 import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
 import type { P3dItem, P3dPayload, FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'

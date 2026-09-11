@@ -120,6 +120,12 @@ export const cardChromeCss = `
 .p3d-card-btn svg{flex:none}
 .p3d-card-stage{position:absolute;inset:0;z-index:3;background:var(--color-surface)}
 .p3d-card-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+/* The wait while the viewer's own code is fetched, on the product page's stage.
+   In flow rather than absolutely positioned, unlike the card one above: the card
+   stage is a positioned box of a known size and a gallery stage is whatever the
+   layout made it, so this has to hold its own height rather than stretch to a
+   parent that may not be positioned at all. */
+.p3d-stage-loading{display:flex;align-items:center;justify-content:center;width:100%;min-height:160px}
 .p3d-card-close{position:absolute;top:8px;right:8px;z-index:4;display:flex;align-items:center;justify-content:center;
   width:30px;height:30px;padding:0;border-radius:50%;border:1px solid var(--color-border);background:var(--color-surface);
   color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);transition:background .15s ease}
