@@ -209,12 +209,28 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProductId])
 
-  // Warm the model and swatch caches in the background once the page has settled, so a
-  // later variation change paints from memory instead of fetching. Scheduled on idle
-  // so it trails first paint rather than competing with it, and aborted on unmount so
-  // a shopper who leaves does not leave a preload running. A real pick that lands mid
-  // preload is not fought: it shares the same cached promise (see load-model.ts).
+  // Whether the shopper has shown any interest in the 3D view yet - hovering or
+  // focusing a thumbnail, or actually opening one. Until they have, the caches stay
+  // cold on purpose. See the effect below.
+  const [wantsPreload, setWantsPreload] = useState(false)
+  const interested = wantsPreload || activeKey !== null
+
+  // Warm the model and swatch caches in the background, so a later variation change
+  // paints from memory instead of fetching. Scheduled on idle so it trails first
+  // paint rather than competing with it, and aborted on unmount so a shopper who
+  // leaves does not leave a preload running. A real pick that lands mid preload is
+  // not fought: it shares the same cached promise (see load-model.ts).
+  //
+  // WAITS FOR INTEREST, and that is the whole point of the gate. This strip mounts on
+  // every product page carrying a model, but the textures it warms are the fabric
+  // photographs the viewer paints with - full-size, because a shrunk texture blurs
+  // into mush on a model at true scale. Measured on a live product page, that was
+  // **five megabytes** of swatch originals fetched by every single visitor, for a
+  // viewer most of them never open. Hovering a thumbnail, focusing one with the
+  // keyboard, or opening the view starts it - all of which happen a comfortable
+  // moment before the first colour change, which is what the warming is for.
   useEffect(() => {
+    if (!interested) return
     const controller = new AbortController()
     type IdleWindow = Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
@@ -237,11 +253,12 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
       if (idle !== null) w.cancelIdleCallback?.(idle)
       if (timer !== null) clearTimeout(timer)
     }
-    // Runs once on mount. `data` is the server-resolved, page-static payload - it does
-    // not change without a navigation that remounts this - so it is read here rather
-    // than watched, matching how the thumbnails and viewer treat settings.
+    // Runs once, on the first sign of interest. `data` is the server-resolved,
+    // page-static payload - it does not change without a navigation that remounts
+    // this - so it is read here rather than watched, matching how the thumbnails and
+    // viewer treat settings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [interested])
 
   if (items.length === 0) return null
 
@@ -252,9 +269,20 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
   // they actually chose.
   const painted = Boolean(data.fabric)
 
+  // Pointer or keyboard on the strip is enough - the shopper is looking at the 3D
+  // thumbnails, which is as early a warning as there is. `once` semantics come from
+  // the state itself: setting it true a second time changes nothing.
+  const noticeInterest = () => setWantsPreload(true)
+
   return (
     <>
       <Style />
+      <span
+        aria-hidden="true"
+        style={{ display: 'contents' }}
+        onPointerEnter={noticeInterest}
+        onFocusCapture={noticeInterest}
+      >
       {items.map((item) =>
         painted ? (
           <PaintedThumb3d
@@ -278,6 +306,7 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
           />
         ),
       )}
+      </span>
     </>
   )
 }
