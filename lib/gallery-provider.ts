@@ -4,7 +4,11 @@ import { getFabricConfig } from '@/modules/product-3d-views-for-shop/lib/db/fabr
 import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d-views-for-shop/lib/db/product-settings'
 import { getP3dConfigCached } from '@/modules/product-3d-views-for-shop/lib/config'
 import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
-import { Gallery3dThumbs, Gallery3dStage } from '@/modules/product-3d-views-for-shop/components/public/Gallery3d'
+// Lazy on purpose - see Gallery3dLazy for the 224 KB of three.js this keeps off
+// every page on the site. A STATIC import here puts the whole 3D client subtree
+// in the public layout's graph, because this file is reached from the public
+// extension-point registry.
+import { Gallery3dThumbsLazy, Gallery3dStageLazy } from '@/modules/product-3d-views-for-shop/components/public/Gallery3dLazy'
 import type { ShopGalleryMediaProvider } from '@/modules/shop/lib/gallery-media'
 import type { P3dPayload } from '@/modules/product-3d-views-for-shop/lib/types'
 
@@ -68,6 +72,6 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
       })),
     }
   },
-  Thumbs: Gallery3dThumbs,
-  Stage: Gallery3dStage,
+  Thumbs: Gallery3dThumbsLazy,
+  Stage: Gallery3dStageLazy,
 }
