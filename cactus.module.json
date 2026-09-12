@@ -1,6 +1,6 @@
 {
   "name": "product-3d-views-for-shop",
-  "version": "0.1.104",
+  "version": "0.1.105",
   "tablePrefix": "p3d_",
   "description": "3D models for shop products and their variations: an auto-rotating thumbnail in the product gallery that opens a pan/tilt/zoom viewer in place of the main image.",
   "requiresCoreVersion": "0.5.1601",
@@ -27,13 +27,15 @@
       "point": "shop.gallery-media",
       "id": "product-3d-views",
       "import": "./lib/gallery-provider",
-      "component": "product3dGalleryProvider"
+      "component": "product3dGalleryProvider",
+      "serverOnly": true
     },
     {
       "point": "shop.card-media",
       "id": "product-3d-views-card",
       "import": "./lib/card-media-provider",
-      "component": "product3dCardMedia"
+      "component": "product3dCardMedia",
+      "serverOnly": true
     },
     {
       "point": "shop-variations.variant-field-provider",
