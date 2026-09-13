@@ -25,45 +25,86 @@ import type { P3dModel } from '@/modules/product-3d-views-for-shop/lib/types'
 // in the admin re-measures and restores true scale.
 // ---------------------------------------------------------------------------
 
+// The library row's storage details, as much of it as a repair needs.
+type MediaStorage = { key: string; url: string; provider: string }
+
 /**
- * The model's storage details as they are *now*, repairing the stored copy if the
- * core library has moved the bytes since.
+ * The model with the library's current storage details, or null when the stored
+ * copy already matches and there is nothing to repair. Pure, so the comparison that
+ * decides whether a storefront render writes to the database can be tested alone.
+ */
+export function repairedStorage(model: P3dModel, media: MediaStorage): P3dModel | null {
+  const unchanged =
+    media.key === model.mediaKey &&
+    media.url === model.url &&
+    media.provider === model.mediaProvider
+  if (unchanged) return null
+  return { ...model, url: media.url, mediaKey: media.key, mediaProvider: media.provider }
+}
+
+/**
+ * Every model's storage details as they are *now*, repairing any stored copy the
+ * core library has moved the bytes out from under.
  *
  * Rows with no media_id, or whose library row has since been deleted (a Google
  * Sheet import that stored a url and no id, a blob removed outright), are handed
  * back untouched - the stored url is then the only address we have, and a stale
  * guess still beats no guess.
+ *
+ * One library read for the whole list. This used to be one findUnique per row that
+ * carried a library id, run over every model in a product tree on every product
+ * page render - and a big range is thousands of rows (a desk with 480 variations and
+ * six add-on files each is 2,880). The ids repeat heavily besides, one file attached
+ * across a size run being one id on many rows, so they are de-duplicated first: a
+ * tree of any size costs one indexed query, or none at all when no row carries an
+ * id. Order in, order out.
+ */
+export async function withFreshStorageForAll(models: P3dModel[]): Promise<P3dModel[]> {
+  const mediaIds = [...new Set(models.flatMap((model) => (model.mediaId ? [model.mediaId] : [])))]
+  if (mediaIds.length === 0) return models
+
+  const mediaRows = await prisma.media.findMany({
+    where: { id: { in: mediaIds } },
+    select: { id: true, key: true, url: true, provider: true },
+  })
+  const mediaById = new Map<string, MediaStorage>(mediaRows.map((row) => [row.id, row]))
+
+  return Promise.all(
+    models.map(async (model) => {
+      const media = model.mediaId ? mediaById.get(model.mediaId) : undefined
+      if (!media) return model
+      const repaired = repairedStorage(model, media)
+      if (!repaired) return model
+      await writeBackStorage(model.id, media)
+      return repaired
+    }),
+  )
+}
+
+/**
+ * One model's storage details as they are *now*. The single-row form of
+ * withFreshStorageForAll, with exactly its rules.
  */
 export async function withFreshStorage(model: P3dModel): Promise<P3dModel> {
-  if (!model.mediaId) return model
+  const [fresh] = await withFreshStorageForAll([model])
+  return fresh ?? model
+}
 
-  const media = await prisma.media.findUnique({
-    where: { id: model.mediaId },
-    select: { key: true, url: true, provider: true },
-  })
-  if (!media) return model
-
-  const unchanged =
-    media.key === model.mediaKey &&
-    media.url === model.url &&
-    media.provider === model.mediaProvider
-  if (unchanged) return model
-
-  // Write-back is best effort on purpose. The job of this function is to serve the
-  // model; if the UPDATE loses a race with another request healing the same row,
-  // or the connection drops, the caller still gets the right address and the next
-  // read tries the repair again.
+// Write-back is best effort on purpose. The job of the heal is to serve the model; if
+// the UPDATE loses a race with another request healing the same row, or the
+// connection drops, the caller still gets the right address and the next read tries
+// the repair again. One statement per stale row, as before: stale rows are the rare
+// backlog, and each carries its own id.
+async function writeBackStorage(modelId: string, media: MediaStorage): Promise<void> {
   await prisma.$executeRaw`
     UPDATE "p3d_models"
     SET "url" = ${media.url}, "media_key" = ${media.key}, "media_provider" = ${media.provider}
-    WHERE "id" = ${model.id}
+    WHERE "id" = ${modelId}
   `.catch((error: unknown) => {
-    console.warn(`[product-3d-views-for-shop] could not refresh storage details for ${model.id}:`, error)
+    console.warn(`[product-3d-views-for-shop] could not refresh storage details for ${modelId}:`, error)
   })
 
   console.info(
-    `[product-3d-views-for-shop] model ${model.id} had moved in the media library; url refreshed to ${media.url}`,
+    `[product-3d-views-for-shop] model ${modelId} had moved in the media library; url refreshed to ${media.url}`,
   )
-
-  return { ...model, url: media.url, mediaKey: media.key, mediaProvider: media.provider }
 }

@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db/prisma'
 import { deleteMedia } from '@/lib/media/upload'
 import { signAssetUrl } from '@/lib/media/asset-token'
-import { withFreshStorage } from '@/modules/product-3d-views-for-shop/lib/db/heal'
+import { withFreshStorageForAll } from '@/modules/product-3d-views-for-shop/lib/db/heal'
 import type { MediaProviderType } from '@prisma/client'
 import type { P3dAdminModel, P3dModel, P3dOption, P3dTarget } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
@@ -117,6 +117,22 @@ export async function getVariationLabels(productId: string): Promise<Map<string,
     out.set(variant.childProductId, parts.length > 0 ? parts.join(' / ') : 'Variation')
   }
   return out
+}
+
+/**
+ * The child product ids of a product's variations, in matrix order. Empty when
+ * shop-variations is not installed, or the product has no variations.
+ *
+ * The ids alone, for a caller that needs to know which products make up the tree
+ * but not what to call them. getVariationLabels answers the same question with a
+ * second query on top, reading every option value of every variation to build the
+ * names - on a 480-variation desk, 2,880 option-value rows fetched and joined into
+ * labels on every product page render, only for the storefront to throw the labels
+ * away.
+ */
+async function getVariationChildIds(productId: string): Promise<string[]> {
+  if (!(await hasVariationsTables())) return []
+  return (await listVariantRows(productId)).map((variant) => variant.childProductId)
 }
 
 /** A product's variants, in matrix order. */
@@ -240,7 +256,7 @@ function filterContexts<T extends { context: string }>(rows: T[], opts?: ModelRe
  * shop-variations' mapping table where it is installed.
  */
 export async function getModelsForProductTree(productId: string, opts?: ModelReadOpts): Promise<P3dModel[]> {
-  const ids = [productId, ...(await getVariationLabels(productId)).keys()]
+  const ids = [productId, ...(await getVariationChildIds(productId))]
   const rows = await prisma.$queryRaw<ModelRow[]>`
     SELECT ${COLUMNS}
     FROM "p3d_models"
@@ -250,8 +266,9 @@ export async function getModelsForProductTree(productId: string, opts?: ModelRea
   // Repair any row the core library moved out from under before the media
   // reference rewriter existed, so the storefront and the editor preview both get
   // the blob's current address rather than a 404. A no-op for rows already in step
-  // (the common case), and for url-only Google Sheet imports with no media id.
-  return Promise.all(filterContexts(rows, opts).map((r) => withFreshStorage(toModel(r))))
+  // (the common case), and for url-only Google Sheet imports with no media id. One
+  // library read for the whole tree, however many rows it has - see heal.ts.
+  return withFreshStorageForAll(filterContexts(rows, opts).map(toModel))
 }
 
 /** The editor's list: every model for the product tree, each named by its target. */

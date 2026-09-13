@@ -29,6 +29,7 @@ const Viewer3d = dynamic(
 )
 import { ViewerChromeStyle } from '@/modules/product-3d-views-for-shop/components/public/P3dChrome'
 import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
+import { readGalleryPayload } from '@/modules/product-3d-views-for-shop/lib/pack/gallery-payload'
 import type { P3dItem, P3dPayload, FabricBundle } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { ShopGalleryExtraStageProps, ShopGalleryExtraThumbsProps } from '@/modules/shop/lib/gallery-media'
@@ -119,7 +120,9 @@ function Thumb3d({ item, settings, fabric, active, thumbClass, thumbOnClass, onP
 }
 
 export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
-  const raw = payload as P3dPayload
+  // Packed on the wire (lib/pack/gallery-payload.ts) and unpacked here, at the
+  // boundary, so everything below reads the plain P3dPayload it always has.
+  const raw = readGalleryPayload(payload)
   // The strip offers BASE models only. Add-on-combination files (a tagged
   // context) exist for the stage to swap to when the page announces that
   // combination - a thumbnail each would fill the strip with near-identical
@@ -434,7 +437,9 @@ function PaintedStage({ payload, item, context, extraValueIds }: {
 }
 
 export function Gallery3dStage({ payload, itemKey }: ShopGalleryExtraStageProps) {
-  const data = payload as P3dPayload
+  // Unpacked at the boundary, like the strip's - the same object comes back for the
+  // same payload, so the stage and the strip share one unpack between them.
+  const data = readGalleryPayload(payload)
 
   // The add-on combination the page has announced (empty until an accessories
   // box - or whatever else speaks the contract - says otherwise). Subscribed

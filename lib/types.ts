@@ -51,8 +51,10 @@ export type P3dItem = {
   context?: string
 }
 
-// What `load` hands the browser, via shop's `shop.gallery-media` point. Must stay
-// JSON-serialisable: it crosses the RSC boundary as a plain prop.
+// What the gallery's strip and stage work from, as `load` builds it for shop's
+// `shop.gallery-media` point. Must stay JSON-serialisable: it crosses the RSC
+// boundary as a plain prop. It travels packed (lib/pack/gallery-payload.ts) and is
+// unpacked back into exactly this shape the moment the client components receive it.
 export type P3dPayload = {
   // The product whose page this is. Anything in `items` with a different
   // productId therefore belongs to one of its variations.
@@ -83,6 +85,8 @@ export type P3dCardModel = {
 // to show a model on a product CARD in a grid. The overlay picks WHICH model by the
 // variation the shopper is looking at (the carousel's active image), so a payload
 // carries more than one: JSON-serialisable, crosses the RSC boundary as a plain prop.
+// Travels packed (lib/pack/card-payload.ts) and is unpacked back into exactly this
+// shape by the overlay before it reads anything.
 export type P3dCardPayload = {
   settings: P3dConfig
   parentProductId: string

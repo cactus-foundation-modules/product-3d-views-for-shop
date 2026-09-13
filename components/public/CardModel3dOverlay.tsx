@@ -42,8 +42,9 @@ import dynamic from 'next/dynamic'
 import { ViewerChromeStyle, CardChromeStyle } from '@/modules/product-3d-views-for-shop/components/public/P3dChrome'
 import { fetchBundle } from '@/modules/product-3d-views-for-shop/lib/fabric-fetch'
 import { buildSlides, initialIndex } from '@/modules/product-3d-views-for-shop/lib/card-slides'
+import { readCardPayload } from '@/modules/product-3d-views-for-shop/lib/pack/card-payload'
 import type { CardOverlayProps } from '@/modules/shop/lib/card-media'
-import type { P3dCardPayload, P3dCardModel } from '@/modules/product-3d-views-for-shop/lib/types'
+import type { P3dCardModel } from '@/modules/product-3d-views-for-shop/lib/types'
 
 const OPEN_EVENT = 'p3d-card-open'
 
@@ -98,7 +99,10 @@ function Chevron({ dir }: { dir: 'left' | 'right' }) {
 }
 
 export function CardModel3dOverlay({ payload, activeSourceId }: CardOverlayProps) {
-  const data = payload as P3dCardPayload | null
+  // Packed on the wire (lib/pack/card-payload.ts) and unpacked here, at the boundary.
+  // The same object comes back for the same payload, which is what keeps the slide
+  // memo below from rebuilding on every render.
+  const data = readCardPayload(payload)
   const [open, setOpen] = useState(false)
   // Where the open viewer's own arrows are in the slide list. Set from the tapped
   // picture when the viewer opens (see openViewer), then moved only by the arrows.

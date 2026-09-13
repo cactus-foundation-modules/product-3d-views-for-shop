@@ -28,6 +28,7 @@ import { applyProductOverrides, getP3dProductConfig } from '@/modules/product-3d
 import { getP3dConfigCached } from '@/modules/product-3d-views-for-shop/lib/config'
 import { CardModel3dOverlay } from '@/modules/product-3d-views-for-shop/components/public/CardModel3dOverlay'
 import type { ShopCardMediaProvider, ShopCardMediaPayload } from '@/modules/shop/lib/card-media'
+import { packCardPayload } from '@/modules/product-3d-views-for-shop/lib/pack/card-payload'
 import type { P3dModel, P3dCardModel, P3dCardPayload } from '@/modules/product-3d-views-for-shop/lib/types'
 
 function groupByProduct(models: P3dModel[]): Map<string, P3dModel[]> {
@@ -109,7 +110,10 @@ export const product3dCardMedia: ShopCardMediaProvider = {
 
       const settings = applyProductOverrides(siteSettings, await getP3dProductConfig(productId))
       const overlay: P3dCardPayload = { settings, parentProductId: productId, hasFabric, byVariation, fallback, defaultChildId, variationChildIds }
-      out.set(productId, { overlay })
+      // Packed for the wire - on a big range the child id list alone ran to 20 KB a
+      // card - and unpacked by the overlay before it reads a thing. See
+      // lib/pack/card-payload.ts.
+      out.set(productId, { overlay: packCardPayload(overlay) })
     }
 
     return out

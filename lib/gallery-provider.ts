@@ -10,7 +10,7 @@ import { formatLabel } from '@/modules/product-3d-views-for-shop/lib/formats'
 // extension-point registry.
 import { Gallery3dThumbsLazy, Gallery3dStageLazy } from '@/modules/product-3d-views-for-shop/components/public/Gallery3dLazy'
 import type { ShopGalleryMediaProvider } from '@/modules/shop/lib/gallery-media'
-import type { P3dPayload } from '@/modules/product-3d-views-for-shop/lib/types'
+import { packGalleryPayload, type PackedGalleryPayload } from '@/modules/product-3d-views-for-shop/lib/pack/gallery-payload'
 
 // The `shop.gallery-media` provider. Shop asks, once per product page, whether we
 // have anything to add to the gallery; when we do, our thumbnails join the strip
@@ -29,7 +29,7 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
   // Returns null - "nothing here" - for the overwhelming majority of products,
   // which have no 3D model at all. Shop then renders exactly as it did before,
   // and the shopper's browser is never asked to load a viewer it has no use for.
-  async load(productId: string): Promise<P3dPayload | null> {
+  async load(productId: string): Promise<PackedGalleryPayload | null> {
     // Tagged rows included: the strip filters them out client-side, and the
     // stage is what swaps to them when the page announces a combination.
     const models = await getModelsForProductTree(productId, { includeContexts: true })
@@ -49,7 +49,21 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
     // and the gallery renders exactly as it did before, one thumbnail per model file
     // with no live re-texturing.
     const fabric = fabricConfig && fabricConfig.slots.length > 0 ? fabricConfig : null
-    return {
+    // Signed once per distinct file rather than once per row. A range reuses a
+    // handful of files across every variation and add-on combination - 144 files
+    // behind 2,880 rows on a large desk - and each signature is a url parse and an
+    // HMAC. A url signed twice inside one expiry window gives the same answer anyway.
+    const signedUrls = new Map<string, string>()
+    const signOnce = (url: string): string => {
+      const known = signedUrls.get(url)
+      if (known !== undefined) return known
+      const signed = signAssetUrl(url)
+      signedUrls.set(url, signed)
+      return signed
+    }
+    // Packed for the wire (see lib/pack/gallery-payload.ts); the strip and stage
+    // unpack it before reading, so everything below still describes a P3dPayload.
+    return packGalleryPayload({
       parentProductId: productId,
       settings,
       fabric,
@@ -63,14 +77,14 @@ export const product3dGalleryProvider: ShopGalleryMediaProvider = {
         // that is unavoidable for a viewer that has to fetch the file. The token
         // is what stops a copied one being useful a week later, or working at all
         // from someone else's site. See lib/media/asset-token.ts.
-        url: signAssetUrl(m.url),
+        url: signOnce(m.url),
         format: m.format,
         label: `${formatLabel(m.format)} model`,
         // Add-on-combination files ride along for the stage to swap to; the
         // thumbnail strip itself offers base models only (see Gallery3dThumbs).
         context: m.context,
       })),
-    }
+    })
   },
   Thumbs: Gallery3dThumbsLazy,
   Stage: Gallery3dStageLazy,
