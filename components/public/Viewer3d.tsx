@@ -13,7 +13,8 @@
 // which is the default and leaves the GPU idle for the rest of the visit, or the
 // old endless turn.
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeModel, disposeRenderer, frameModel, loadModel, prefetchTexture, resetFabricPaint, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
@@ -168,6 +169,51 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     interactiveRef.current = true
     setInteractive(true)
   }
+
+  // Full viewport, not browser chrome: the stage goes fixed over the page while
+  // the same canvas keeps running, so the shopper's angle and zoom survive the
+  // enlargement. A spacer holds the gallery's height so the page does not jump.
+  const [expanded, setExpanded] = useState(false)
+  const [expandSpacer, setExpandSpacer] = useState<number | null>(null)
+  const expandCloseRef = useRef<HTMLButtonElement>(null)
+  const [expandUrl, setExpandUrl] = useState(item.url)
+  if (expandUrl !== item.url) {
+    setExpandUrl(item.url)
+    if (expanded) {
+      setExpanded(false)
+      setExpandSpacer(null)
+    }
+  }
+
+  const closeExpanded = useCallback((): void => {
+    setExpanded(false)
+    setExpandSpacer(null)
+  }, [])
+
+  const openExpanded = (): void => {
+    claimStage()
+    const host = hostRef.current
+    if (host) setExpandSpacer(host.offsetHeight)
+    setExpanded(true)
+  }
+
+  useEffect(() => {
+    if (!expanded) return
+    expandCloseRef.current?.focus()
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeExpanded()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [expanded, closeExpanded])
 
   // Kept across renders so the repaint effect below can find the built model and
   // its currently-applied fabric textures without rebuilding the whole viewer. The
@@ -1336,15 +1382,16 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     return () => { arEnderRef.current?.(); revoke() }
   }, [])
 
-  return (
+  const stage = (
     // onPointerDown rather than onClick: a claim should land on the way DOWN, so
     // the very press that starts a drag also hands over the wheel, and a tap that
     // never becomes a click still counts. `gated` is what lifts the AR button clear
     // of the pill sharing its corner.
     <div
-      className={`p3d-stage${interactive ? '' : ' gated'}`}
+      className={`p3d-stage${interactive ? '' : ' gated'}${expanded ? ' p3d-stage-expanded' : ''}`}
       ref={hostRef}
       onPointerDown={claimStage}
+      {...(expanded ? { role: 'dialog', 'aria-modal': true, 'aria-label': '3D model, full screen' } : {})}
     >
       {/* Focusable, and labelled with what it is and how it works, because a canvas
           tells assistive technology nothing on its own and the controls up to now were
@@ -1459,7 +1506,38 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           <span>View in your room</span>
         </a>
       )}
+      {status === 'ready' && !expanded && (
+        <button type="button" className="p3d-expand-open" onClick={openExpanded} aria-label="View full screen">
+          <ExpandIcon />
+        </button>
+      )}
+      {expanded && (
+        <button
+          type="button"
+          ref={expandCloseRef}
+          className="p3d-expand-close"
+          onClick={closeExpanded}
+          aria-label="Close full screen"
+        >
+          <CloseIcon />
+        </button>
+      )}
     </div>
+  )
+
+  return (
+    <>
+      {expanded && typeof document !== 'undefined' && createPortal(
+        <div className="p3d-expand-backdrop" aria-hidden />,
+        document.body,
+      )}
+      <div className="p3d-stage-wrap">
+        {expanded && expandSpacer != null && (
+          <div className="p3d-stage-spacer" style={{ height: expandSpacer }} aria-hidden />
+        )}
+        {stage}
+      </div>
+    </>
   )
 }
 
@@ -1473,6 +1551,22 @@ function ArIcon() {
       <path d="M12 2 3 7v10l9 5 9-5V7z" />
       <path d="M3 7l9 5 9-5" />
       <path d="M12 12v10" />
+    </svg>
+  )
+}
+
+function ExpandIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M8 3H3v5M16 3h5v5M16 21h5v-5M8 21H3v-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }

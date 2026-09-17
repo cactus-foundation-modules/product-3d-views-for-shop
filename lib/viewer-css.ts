@@ -11,7 +11,22 @@ export const viewerChromeCss = `
 .p3d-pill{position:absolute;right:3px;bottom:3px;z-index:1;pointer-events:none;
   font-size:9px;font-weight:700;letter-spacing:.03em;line-height:1;padding:2px 4px;border-radius:4px;
   background:var(--color-fg);color:var(--color-bg);opacity:.9}
+.p3d-stage-wrap{width:100%;height:100%}
+/* Holds the gallery's layout steady while the stage itself is fixed to the viewport. */
+.p3d-stage-spacer{width:100%;pointer-events:none;visibility:hidden}
+.p3d-expand-backdrop{position:fixed;inset:0;z-index:9990;background:var(--color-bg);opacity:.92}
 .p3d-stage{width:100%;height:100%;position:relative;background:var(--color-bg-subtle)}
+/* Full viewport, not browser chrome - the same canvas and view, just larger. */
+.p3d-stage-expanded{position:fixed;inset:0;z-index:9991;width:100vw;height:100dvh;max-width:none;max-height:none}
+.p3d-expand-open,.p3d-expand-close{position:absolute;top:8px;right:8px;z-index:3;display:flex;align-items:center;
+  justify-content:center;width:30px;height:30px;padding:0;border-radius:50%;border:1px solid var(--color-border);
+  background:var(--color-surface);color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);
+  transition:background .15s ease}
+.p3d-stage-expanded .p3d-expand-close{top:16px;right:16px}
+.p3d-expand-open:hover,.p3d-expand-open:focus-visible,.p3d-expand-close:hover,.p3d-expand-close:focus-visible{
+  background:var(--color-bg-subtle)}
+.p3d-expand-open:focus-visible,.p3d-expand-close:focus-visible{outline:2px solid var(--color-border-focus);outline-offset:2px}
+.p3d-expand-open svg,.p3d-expand-close svg{flex:none}
 .p3d-stage-canvas{width:100%;height:100%;display:block;touch-action:none;cursor:grab}
 .p3d-stage-canvas:active{cursor:grabbing}
 /* The canvas takes keyboard focus (arrow keys turn the model), so it has to show it.
@@ -101,7 +116,7 @@ export const viewerChromeCss = `
   .p3d-material-wait::before{animation:none}
   .p3d-material-spinner{animation:none;border-top-color:var(--color-bg);opacity:.5}
 }
-@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar{transition:none}}
+@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar,.p3d-expand-open,.p3d-expand-close{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
 
