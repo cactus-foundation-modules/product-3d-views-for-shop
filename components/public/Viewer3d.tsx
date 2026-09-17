@@ -1528,14 +1528,17 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
   return (
     <>
       {expanded && typeof document !== 'undefined' && createPortal(
-        <div className="p3d-expand-backdrop" aria-hidden />,
+        <>
+          <div className="p3d-expand-backdrop" aria-hidden />
+          {stage}
+        </>,
         document.body,
       )}
       <div className="p3d-stage-wrap">
         {expanded && expandSpacer != null && (
           <div className="p3d-stage-spacer" style={{ height: expandSpacer }} aria-hidden />
         )}
-        {stage}
+        {!expanded && stage}
       </div>
     </>
   )

@@ -14,10 +14,12 @@ export const viewerChromeCss = `
 .p3d-stage-wrap{width:100%;height:100%}
 /* Holds the gallery's layout steady while the stage itself is fixed to the viewport. */
 .p3d-stage-spacer{width:100%;pointer-events:none;visibility:hidden}
-.p3d-expand-backdrop{position:fixed;inset:0;z-index:9990;background:var(--color-bg);opacity:.92}
+/* Live chat pins itself at 2147482000; full-screen 3D has to sit above every storefront
+   widget, not just the gallery box it started in. */
+.p3d-expand-backdrop{position:fixed;inset:0;z-index:2147482100;background:var(--color-bg);opacity:1}
 .p3d-stage{width:100%;height:100%;position:relative;background:var(--color-bg-subtle)}
 /* Full viewport, not browser chrome - the same canvas and view, just larger. */
-.p3d-stage-expanded{position:fixed;inset:0;z-index:9991;width:100vw;height:100dvh;max-width:none;max-height:none}
+.p3d-stage-expanded{position:fixed;inset:0;z-index:2147482101;width:100vw;height:100dvh;max-width:none;max-height:none}
 .p3d-expand-open,.p3d-expand-close{position:absolute;top:8px;right:8px;z-index:3;display:flex;align-items:center;
   justify-content:center;width:30px;height:30px;padding:0;border-radius:50%;border:1px solid var(--color-border);
   background:var(--color-surface);color:var(--color-fg);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.18);
