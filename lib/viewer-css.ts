@@ -12,6 +12,12 @@ export const viewerChromeCss = `
   font-size:9px;font-weight:700;letter-spacing:.03em;line-height:1;padding:2px 4px;border-radius:4px;
   background:var(--color-fg);color:var(--color-bg);opacity:.9}
 .p3d-stage-wrap{width:100%;height:100%}
+.p3d-stage-slot{width:100%;height:100%}
+/* The stage's travelling parent (Viewer3d moves this element between the gallery slot
+   and the full-screen backdrop rather than re-rendering the stage into either, so the
+   canvas keeps its live WebGL context). It must generate no box of its own, or the
+   stage's height:100% would resolve against it instead of the slot around it. */
+.p3d-stage-host{display:contents}
 /* Holds the gallery's layout steady while the stage itself is fixed to the viewport. */
 .p3d-stage-spacer{width:100%;pointer-events:none;visibility:hidden}
 /* Live chat pins itself at 2147482000; full-screen 3D has to sit above every storefront

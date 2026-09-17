@@ -13,7 +13,7 @@
 // which is the default and leaves the GPU idle for the rest of the visit, or the
 // old endless turn.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Object3D, Texture, WebGLRenderer as ThreeRenderer } from 'three'
 import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -176,6 +176,33 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
   const [expanded, setExpanded] = useState(false)
   const [expandSpacer, setExpandSpacer] = useState<number | null>(null)
   const expandCloseRef = useRef<HTMLButtonElement>(null)
+  // The stage's own parent element, made once here and MOVED between the gallery
+  // and the full-screen backdrop rather than re-rendered into either.
+  //
+  // This is the whole trick, and the full-screen view was blank without it. Moving
+  // the stage's JSX from the gallery into a portal moves it in the REACT tree, and
+  // React answers that by unmounting the old DOM and mounting fresh DOM - a brand
+  // new, never-drawn-into <canvas>. The WebGLRenderer, which is held in a ref and
+  // so survives untouched, carries on rendering into the old canvas, now detached
+  // from the document: every control drew, and the picture did not. The effects
+  // that would rebuild onto the new canvas belong to this component, which never
+  // unmounted, so none of them re-ran either.
+  //
+  // Portalling into a node whose identity NEVER changes keeps the React tree
+  // perfectly still; the browser then carries the same canvas, the same live WebGL
+  // context and the same angle and zoom across the move, because re-parenting an
+  // element does not disturb either. This component is `ssr: false` at its import
+  // (see Gallery3d), so there is no server render to mismatch.
+  const [stageHost] = useState<HTMLDivElement | null>(() => {
+    if (typeof document === 'undefined') return null
+    const el = document.createElement('div')
+    // display:contents - the host must not become a layout box of its own, or the
+    // stage's height:100% would resolve against it instead of the gallery's slot.
+    el.className = 'p3d-stage-host'
+    return el
+  })
+  const stageSlotRef = useRef<HTMLDivElement>(null)
+  const expandSlotRef = useRef<HTMLDivElement>(null)
   const [expandUrl, setExpandUrl] = useState(item.url)
   if (expandUrl !== item.url) {
     setExpandUrl(item.url)
@@ -1382,6 +1409,21 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     return () => { arEnderRef.current?.(); revoke() }
   }, [])
 
+  // Put the stage where it belongs for the current state - see stageHost above for
+  // why this is a DOM move and not a re-render. Layout effect, not a plain one, so
+  // it lands in the same frame as the class change that resizes the stage.
+  useLayoutEffect(() => {
+    if (!stageHost) return
+    const parent = expanded ? expandSlotRef.current : stageSlotRef.current
+    if (!parent || stageHost.parentNode === parent) return
+    parent.appendChild(stageHost)
+    // The loop only draws when something asks it to, and a canvas that has just
+    // changed size (or been re-parented while parked off screen) has nothing on it
+    // worth compositing. Ask for a frame in the new home.
+    unparkLoopRef.current?.()
+    invalidateRef.current?.()
+  }, [expanded, stageHost])
+
   const stage = (
     // onPointerDown rather than onClick: a claim should land on the way DOWN, so
     // the very press that starts a drag also hands over the wheel, and a tap that
@@ -1527,19 +1569,25 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
 
   return (
     <>
+      {/* The backdrop is the full-screen slot as well as the sheet of colour: the
+          stage host is appended INTO it while expanded (see the layout effect
+          above), so the stage sits above the backdrop's own background without
+          having to escape a stacking context it is not inside. Deliberately not
+          aria-hidden - it is the dialog's ancestor, and hiding it would hide the
+          dialog from assistive technology along with it. */}
       {expanded && typeof document !== 'undefined' && createPortal(
-        <>
-          <div className="p3d-expand-backdrop" aria-hidden />
-          {stage}
-        </>,
+        <div className="p3d-expand-backdrop" ref={expandSlotRef} />,
         document.body,
       )}
       <div className="p3d-stage-wrap">
         {expanded && expandSpacer != null && (
           <div className="p3d-stage-spacer" style={{ height: expandSpacer }} aria-hidden />
         )}
-        {!expanded && stage}
+        {/* Empty to React, and that is the point: the stage host is appended here
+            by hand, so React never has to reconcile a child it did not put there. */}
+        <div className="p3d-stage-slot" ref={stageSlotRef} />
       </div>
+      {stageHost && createPortal(stage, stageHost)}
     </>
   )
 }
