@@ -127,6 +127,39 @@ describe('the 3D viewer animation toggle', () => {
     expect(pivot.position.y).toBeCloseTo(0, 5)
   })
 
+  it('can be asked how big the model gets, without the shopper seeing it get there', () => {
+    // The viewer reads this at build time to work out how far back the camera has
+    // to be allowed to go: an open cupboard needs more room than a shut one, and
+    // the owner's zoom limit was set against the shut one.
+    const { toggle, pivot } = toggleFor()
+    const measured = toggle.sampleOpenPose(() => pivot.position.y)
+
+    expect(measured).toBeCloseTo(1, 5)
+    // Put straight back, so the model on screen has not moved and the control
+    // still offers to open it.
+    expect(pivot.position.y).toBeCloseTo(0, 5)
+    expect(toggle.isOpen()).toBe(false)
+    expect(toggle.update(1 / 60)).toBe(false)
+  })
+
+  it('puts the model back even when the measurement throws', () => {
+    const { toggle, pivot } = toggleFor()
+    expect(() => toggle.sampleOpenPose(() => { throw new Error('no bounding box') })).toThrow('no bounding box')
+    // Otherwise the model sits open behind a button offering to open it.
+    expect(pivot.position.y).toBeCloseTo(0, 5)
+    expect(toggle.isOpen()).toBe(false)
+  })
+
+  it('samples the end pose from an already-open model without shutting it', () => {
+    const { toggle, pivot } = toggleFor()
+    toggle.press(false)
+    runToRest(toggle)
+
+    expect(toggle.sampleOpenPose(() => pivot.position.y)).toBeCloseTo(1, 5)
+    expect(pivot.position.y).toBeCloseTo(1, 5)
+    expect(toggle.isOpen()).toBe(true)
+  })
+
   it('names itself after the file’s own clip', () => {
     expect(toggleFor('DoorsOpen').toggle.clipName).toBe('DoorsOpen')
     expect(toggleFor('ColumnUp').toggle.clipName).toBe('ColumnUp')

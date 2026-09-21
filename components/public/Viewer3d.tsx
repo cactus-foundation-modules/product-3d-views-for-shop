@@ -1031,6 +1031,44 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           animRef.current = anim
           setAnimClip(anim.clipName)
           setAnimOpen(false)
+          // How far back a shopper may pull the camera is the owner's setting, and
+          // they tuned it against the product as it sits on the shelf. An open
+          // cupboard is a physically bigger object than the same cupboard shut -
+          // two doors standing out sideways is most of its width again - so that
+          // ceiling, which framed the closed model perfectly well, stops short with
+          // the doors half out of frame and nothing left to scroll.
+          //
+          // So the ceiling is raised by however much bigger the model ACTUALLY gets,
+          // measured in its end pose rather than guessed at with a multiplier: doors
+          // grow it sideways, a rising desk column grows it upwards, and a sliding
+          // drawer grows it towards the shopper. Same reading answers all three, and
+          // a file whose clip barely moves anything gets no change at all.
+          //
+          // Proportional to the owner's own number rather than replacing it, so a
+          // site that deliberately keeps its viewer on a short leash keeps it. The
+          // cap is for the pathological file that flings a door into the next
+          // postcode; three times is already a very open cupboard.
+          // The bounding SPHERE, not the longest side. How far back the camera has
+          // to be is set by the model's radius about its middle, and on a tall
+          // product the longest side is the height both shut and open - so a
+          // wardrobe whose doors swing a foot out either side would have measured as
+          // not having grown at all, and kept the ceiling that crops them. The
+          // radius grows whichever direction the movement goes in.
+          const radius = (): number => {
+            // setFromObject refreshes the world matrices of the model and everything
+            // under it, which is exactly what the animation has just moved.
+            const box = new three.Box3().setFromObject(model)
+            return box.getBoundingSphere(new three.Sphere()).radius
+          }
+          const shut = radius()
+          const open = anim.sampleOpenPose(radius)
+          // A degenerate or unmeasurable model leaves the ceiling exactly where the
+          // owner put it - the same "leave it alone rather than render NaN" rule
+          // frameModel follows.
+          const growth = shut > 0 && Number.isFinite(shut) && Number.isFinite(open)
+            ? Math.min(3, Math.max(1, open / shut))
+            : 1
+          controls.maxDistance = settings.maxDistance * growth
         }
         // Real elapsed time, not a per-frame constant: a dropped frame on a slow
         // device should cost smoothness, not leave the socket travelling in slow

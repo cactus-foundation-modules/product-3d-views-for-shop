@@ -45,6 +45,20 @@ export type AnimationToggle = {
    * as a model with none.
    */
   update: (delta: number) => boolean
+  /**
+   * Put the model into its end pose, hand it to `measure`, and put it straight
+   * back - all inside one call, with nothing drawn in between, so the shopper
+   * never sees it happen.
+   *
+   * This is how the viewer finds out how much ROOM an open product needs before
+   * anybody has opened one. Reading the clip's own tracks instead would mean
+   * reimplementing three's interpolation and its node binding, and would still
+   * not say where the moved nodes land in world space.
+   *
+   * Build time only, while nothing is in flight: it pauses every action to take
+   * the reading, so calling it mid-travel would stop the model dead.
+   */
+  sampleOpenPose: <T>(measure: () => T) => T
 }
 
 export type AnimationToggleDeps = {
@@ -117,6 +131,20 @@ export function createAnimationToggle({ mixer, clips, loopOnce }: AnimationToggl
       // True even on the frame that finished, so the clamped end pose gets drawn
       // rather than left one frame short of where the shopper asked for it.
       return true
+    },
+
+    sampleOpenPose: (measure) => {
+      const was = open
+      open = true
+      settle()
+      try {
+        return measure()
+      } finally {
+        // Restored in a finally so a measurement that throws cannot leave the
+        // model standing open with a button that says "Open the doors".
+        open = was
+        settle()
+      }
     },
   }
 }
