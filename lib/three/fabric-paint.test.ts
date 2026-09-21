@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { BufferGeometry, Color, Float32BufferAttribute, Mesh, MeshStandardMaterial, Texture } from 'three'
+import { BufferGeometry, Color, Float32BufferAttribute, Group, Mesh, MeshStandardMaterial, Texture } from 'three'
 import { applyFabricPaint, resetFabricPaint } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 
 // The configurator's promise is that one swatch means one finish, whichever file a
@@ -99,6 +99,30 @@ describe('applyFabricPaint', () => {
     expect(other.color.getHex()).toBe(0xcccccc)
     expect(other.map).toBeNull()
     expect(new Color(0xcccccc).getHex()).toBe(other.color.getHex())
+  })
+
+  it('touches only its own slot on a model carrying a drawerful of other materials', async () => {
+    // An animated file carries everything that only matters once it is open - hinge
+    // hardware, screws, the rim lock's barrel - so it has several times the materials
+    // of the plain model of the same product. None of that is the configurator's to
+    // repaint, and a paint that swept up "everything that looked like a surface"
+    // would turn a cupboard's hinges beech.
+    const slot = new MeshStandardMaterial({ name: 'mat_table_top', color: 0xcccccc })
+    const hardware = ['hinge_steel', 'screw_head', 'lock_barrel', 'mat_table_leg'].map(
+      (name) => new MeshStandardMaterial({ name, color: 0x333333, roughness: 0.4, metalness: 1 }),
+    )
+    const model = new Group()
+    for (const material of [slot, ...hardware]) model.add(meshWith(material))
+
+    await applyFabricPaint(model, SLOT)
+
+    expect(slot.map).not.toBeNull()
+    for (const material of hardware) {
+      expect(material.map).toBeNull()
+      expect(material.color.getHex()).toBe(0x333333)
+      expect(material.roughness).toBe(0.4)
+      expect(material.metalness).toBe(1)
+    }
   })
 })
 

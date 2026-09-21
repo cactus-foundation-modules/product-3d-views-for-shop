@@ -73,13 +73,25 @@ export const viewerChromeCss = `
    for Quick Look) - both carry the p3d-ar class. Solid fill on the theme's own
    tokens so it reads on any stage background, and it is a real target, so unlike
    the hint it takes pointer and keyboard events. */
-.p3d-ar{position:absolute;left:8px;bottom:8px;z-index:2;cursor:pointer;border:none;
+/* Shared with the animation toggle below: both are things a shopper does TO the
+   product rather than to the view of it, so they read as one kind of control and
+   differ only in which corner they sit in. */
+.p3d-ar,.p3d-animate{position:absolute;z-index:2;cursor:pointer;border:none;
   display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:11px;
   font-weight:600;line-height:1;padding:6px 10px;border-radius:999px;text-decoration:none;
   background:var(--color-fg);color:var(--color-bg);opacity:.85;white-space:nowrap;
   transition:opacity .15s ease}
+.p3d-ar{left:8px;bottom:8px}
 .p3d-ar:hover,.p3d-ar:focus-visible{opacity:1}
 .p3d-ar:disabled{opacity:.5;cursor:default}
+/* The model's own open/close toggle, on the models that carry an animation clip and
+   nowhere else. Bottom-right, because it is the one control on an animated product
+   that is always there - so Reset view, which comes and goes with a moved camera,
+   steps up out of ITS way rather than the other way round. A control that shuffled
+   sideways every time the shopper turned the model would be its own small cruelty. */
+.p3d-animate{right:8px;bottom:8px}
+.p3d-animate:hover,.p3d-animate:focus-visible{opacity:1}
+.p3d-stage.p3d-has-animation .p3d-reset{bottom:38px}
 .p3d-ar-icon{flex:none}
 /* Apple requires an <img> child inside the rel="ar" anchor, but ours is only there
    to satisfy that - the visible glyph is the SVG. Kept in the layout at zero size
@@ -124,7 +136,7 @@ export const viewerChromeCss = `
   .p3d-material-wait::before{animation:none}
   .p3d-material-spinner{animation:none;border-top-color:var(--color-bg);opacity:.5}
 }
-@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar,.p3d-expand-open,.p3d-expand-close{transition:none}}
+@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar,.p3d-animate,.p3d-expand-open,.p3d-expand-close{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
 

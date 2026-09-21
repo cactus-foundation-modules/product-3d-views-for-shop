@@ -20,6 +20,8 @@ import type { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js
 import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disposeModel, disposeRenderer, frameModel, loadModel, prefetchTexture, resetFabricPaint, warmKtx2Support } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
 import { detectArSupport, bakeUsdzUrl, startWebXrAr, type ArKind } from '@/modules/product-3d-views-for-shop/lib/three/ar'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
+import { createAnimationToggle, type AnimationToggle } from '@/modules/product-3d-views-for-shop/lib/three/animation-toggle'
+import { animationLabel } from '@/modules/product-3d-views-for-shop/lib/animation-labels'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -273,6 +275,37 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
   // hoisting the whole WebGL setup into React state.
   const resetRef = useRef<(() => void) | null>(null)
 
+  // The loaded model's own animation, if it ships one. Three facts, split because
+  // they are wanted in three different places:
+  //
+  // animRef is the live toggle, which lives in build()'s closure like the camera
+  // does. animClip is the name of the clip it drives, held in React state purely so
+  // the control can exist at all - null means "this file carries no animation", and
+  // that is the ONLY thing that decides whether a shopper sees the button. There is
+  // no per-product setting and nothing here knows which product this is. animOpen is
+  // where the toggle is heading, which is what the label and aria-pressed read.
+  const animRef = useRef<AnimationToggle | null>(null)
+  const [animClip, setAnimClip] = useState<string | null>(null)
+  const [animOpen, setAnimOpen] = useState(false)
+
+  // The press. The toggle reverses from wherever the model has got to, so mashing
+  // this only ever changes which way the doors are travelling - it never jumps the
+  // model, never queues a second run, and never leaves the label describing
+  // something the model is not doing.
+  const onAnimateClick = useCallback((): void => {
+    const anim = animRef.current
+    if (!anim) return
+    // Read at press time rather than at build time: the preference can change under
+    // a page that is already open, and asking costs nothing. Someone who has asked
+    // for reduced motion still gets to open the doors - they just get the open
+    // cupboard rather than a performance of it opening.
+    const instant = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    setAnimOpen(anim.press(instant))
+    // The jump-straight-there path moves the model without the loop ever seeing a
+    // running clip, so nothing else would ask for the frame that shows it.
+    invalidateRef.current?.()
+  }, [])
+
   // The live renderer. It belongs to the CANVAS rather than to the model on it, so
   // it is built once per canvas and reused by every model that follows - see the
   // build effect and the retire effect that pairs with it. Null before the first
@@ -390,6 +423,13 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     const token = ++buildTokenRef.current
     const isCurrent = (): boolean => buildTokenRef.current === token
     setStatus('loading')
+    // A different model url is a different file, and whatever the last one could do
+    // this one has to carry for itself. Cleared on the way in rather than in dispose,
+    // so a build that is superseded mid-load cannot leave a control on the stage
+    // pointing at a toggle that no longer exists.
+    animRef.current = null
+    setAnimClip(null)
+    setAnimOpen(false)
     // Read here, synchronously after the previous viewer's dispose captured it -
     // the model load inside build() can take seconds, and the freshness window is
     // about the dispose-to-rebuild gap, not the download.
@@ -968,18 +1008,30 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           seen.observe(host!)
         }
 
-        // A file that ships its own animation plays it on a loop - a desk with a
-        // pop-up socket demonstrating itself is the whole reason the shopper opened
-        // the viewer. This is the file's motion, not ours: nothing here knows what
-        // moves or how far, so a new animated product needs no code.
+        // A file that ships its own animation gets a control: pressed, the model
+        // plays the clip forward and stays in its final pose; pressed again, the same
+        // clip runs backwards to where it started. This is the file's motion, not
+        // ours - nothing here knows what moves or how far, so a cupboard whose doors
+        // open and a desk with a rising column both work with no code between them.
         //
-        // Gated on the same wantsMotion as the idle turn, and for the same reason -
-        // but NOT on the touch latch that stops the turn. The spin stops on touch
-        // because it fights a shopper trying to look at one corner; the pop-up is
-        // the thing they are trying to look at, and stopping it mid-travel would
-        // freeze the model in a state the real product never sits in.
-        const mixer = wantsMotion && model.animations.length > 0 ? new AnimationMixer(model) : null
-        for (const clip of mixer ? model.animations : []) mixer!.clipAction(clip).play()
+        // The ONLY thing that decides whether there is a control is whether the
+        // loaded GLB carries clips. Not a product setting, not this product's id: a
+        // plain model has no button, no mixer and no extra work per frame.
+        //
+        // Deliberately NOT gated on wantsMotion (the idle turn's setting, and the
+        // reduced-motion preference with it) as the old self-playing loop was. This
+        // is motion the shopper asked for by pressing a button rather than motion the
+        // page decided to show them, so the preference is honoured by jumping to the
+        // end pose instead of by taking the control away - see onAnimateClick.
+        const mixer = model.animations.length > 0 ? new AnimationMixer(model) : null
+        const anim = mixer
+          ? createAnimationToggle({ mixer, clips: model.animations, loopOnce: three.LoopOnce })
+          : null
+        if (anim) {
+          animRef.current = anim
+          setAnimClip(anim.clipName)
+          setAnimOpen(false)
+        }
         // Real elapsed time, not a per-frame constant: a dropped frame on a slow
         // device should cost smoothness, not leave the socket travelling in slow
         // motion against the clock the file was authored to.
@@ -1011,15 +1063,21 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           // teleports through its whole sweep on the first frame back is not a nudge.
           const elapsed = Math.min(now - lastFrameAt, 100)
           lastFrameAt = now
-          // Ticked every frame whether or not it is drawn, or a dropped frame would
-          // leave the clip running against a clock it was not authored to.
-          if (mixer && clock) {
+          // The animation, driven by this loop's own delta rather than by a timer:
+          // a clip that advanced on setInterval would keep travelling while the tab
+          // was throttled and arrive somewhere the shopper never watched it reach.
+          //
+          // The clock is read every frame whether or not the clip is moving, so the
+          // press that sets it off gets a real frame's delta rather than however long
+          // the model had been sitting there. The draw is NOT: a model parked at
+          // either end of its travel asks for nothing, which is what keeps an
+          // animated product as cheap per frame as a plain one until it is used.
+          if (anim && clock) {
             // Clamped for the same reason `elapsed` is: the clock keeps running while
             // the loop is parked (a backgrounded tab, a stage scrolled out of view),
             // and handing the mixer half a minute in one go would fast-forward the
             // clip to wherever it had got to unwatched instead of resuming it.
-            mixer.update(Math.min(clock.getDelta(), 0.1))
-            invalidate()
+            if (anim.update(Math.min(clock.getDelta(), 0.1))) invalidate()
           }
           // The model-spin path: the idle turn, or the glide left over from a drag.
           // The light and the shadow-catcher plane are scene-level and never move,
@@ -1110,6 +1168,7 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           // leave one live binding set per model behind the disposed geometry.
           mixer?.stopAllAction()
           mixer?.uncacheRoot(model)
+          animRef.current = null
           observer.disconnect()
           // Connected for the whole life of the viewer: it is what parks the loop when
           // the stage scrolls out of view and restarts it when it comes back.
@@ -1424,13 +1483,18 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     invalidateRef.current?.()
   }, [expanded, stageHost])
 
+  // Whether the model on the stage right now can open. Hoisted because the stage
+  // needs to know as well as the button does: the animation control holds the
+  // bottom-right corner, so Reset view steps up out of its way (see the CSS).
+  const showAnimate = status === 'ready' && animClip !== null
+
   const stage = (
     // onPointerDown rather than onClick: a claim should land on the way DOWN, so
     // the very press that starts a drag also hands over the wheel, and a tap that
     // never becomes a click still counts. `gated` is what lifts the AR button clear
     // of the pill sharing its corner.
     <div
-      className={`p3d-stage${interactive ? '' : ' gated'}${expanded ? ' p3d-stage-expanded' : ''}`}
+      className={`p3d-stage${interactive ? '' : ' gated'}${expanded ? ' p3d-stage-expanded' : ''}${showAnimate ? ' p3d-has-animation' : ''}`}
       ref={hostRef}
       onPointerDown={claimStage}
       {...(expanded ? { role: 'dialog', 'aria-modal': true, 'aria-label': '3D model, full screen' } : {})}
@@ -1524,6 +1588,18 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
       {status === 'ready' && interactive && moved && (
         <button type="button" className="p3d-reset" onClick={() => resetRef.current?.()}>
           Reset view
+        </button>
+      )}
+      {/* The model's own open/close control, and the only thing that puts it here is
+          the loaded file carrying an animation clip. Bottom-right, beside the rest of
+          the stage chrome rather than on some new surface of its own.
+          The button's text IS its accessible name and it changes with the state, so
+          a screen reader hears what pressing it will do next; aria-pressed carries
+          the state itself. The wording lives in lib/animation-labels so a site can
+          name a mechanism of its own without touching the viewer. */}
+      {showAnimate && animClip !== null && (
+        <button type="button" className="p3d-animate" onClick={onAnimateClick} aria-pressed={animOpen}>
+          {animationLabel(animClip, animOpen)}
         </button>
       )}
       {/* "View in your room": shown only where the device has a working AR path for

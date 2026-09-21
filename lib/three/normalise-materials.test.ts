@@ -164,4 +164,33 @@ describe('normaliseMaterials', () => {
     await normaliseMaterials(parent, 'obj')
     expect(materialOf(child).isMeshStandardMaterial).toBe(true)
   })
+
+  it('leaves every node name and the shape of the tree exactly as the file had them', async () => {
+    // An animation clip binds to nodes by NAME and by path through the hierarchy, so
+    // a load-time pass that flattened, merged or renamed anything would silently
+    // unhook the clip: the model would arrive whole, look right, and simply refuse to
+    // move. This is the guard on any future pass that is tempted to tidy the tree up.
+    const root = new Group()
+    root.name = 'Cupboard'
+    const carcass = new Group()
+    carcass.name = 'carcass'
+    const left = meshWith(new MeshPhongMaterial({ name: 'Door' }))
+    left.name = 'left door pivot'
+    const right = meshWith(new MeshPhongMaterial({ name: 'Door' }))
+    right.name = 'right door pivot'
+    const bolt = meshWith(new MeshPhongMaterial({ name: 'Steel' }))
+    bolt.name = 'rim lock bolt'
+    carcass.add(left, right)
+    root.add(carcass, bolt)
+
+    await normaliseMaterials(root, 'gltf')
+
+    const seen: string[] = []
+    root.traverse((node) => seen.push(node.name))
+    expect(seen).toEqual(['Cupboard', 'carcass', 'left door pivot', 'right door pivot', 'rim lock bolt'])
+    // The parents an animated node hangs off matter as much as the node itself - a
+    // track resolves down the tree from the mixer's root.
+    expect(left.parent).toBe(carcass)
+    expect(carcass.parent).toBe(root)
+  })
 })
