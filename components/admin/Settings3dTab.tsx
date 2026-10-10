@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/SettingsHeaderActions'
 // config-shared, not config: this is a client component, and `lib/config` imports
 // prisma. A value import (P3D_CONFIG_DEFAULTS) from there puts the Prisma client
 // in the browser bundle, where its module-scope extension throws and takes the
@@ -141,28 +142,26 @@ export function Settings3dTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: 'var(--space-4)' }}>
-        <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-          How every 3D model on the site is lit and handled. Applies to the whole catalogue, not one product.
-        </p>
-        <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
-          <button
-            className="btn btn-secondary"
-            type="button"
-            disabled={saving || isDefault}
-            onClick={() => { setConfig(P3D_CONFIG_DEFAULTS); setMessage('') }}
-          >
-            Reset to defaults
-          </button>
-          <button className="btn btn-primary" type="button" disabled={saving} onClick={save}>
-            {saving ? 'Saving…' : 'Save 3D settings'}
-          </button>
-        </div>
-      </div>
+      <p style={{ margin: '0 0 var(--space-4)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+        How every 3D model on the site is lit and handled. Applies to the whole catalogue, not one product.
+      </p>
 
-      {message && <div className="alert alert-success" style={{ marginBottom: '1rem' }}>{message}</div>}
-      {saveError && <div className="alert alert-danger" style={{ marginBottom: '1rem' }}>{saveError}</div>}
+      <SettingsHeaderActions>
+        <SettingsHeaderStatus message={message} error={saveError} />
+        <button
+          className="btn btn-secondary"
+          type="button"
+          disabled={saving || isDefault}
+          onClick={() => { setConfig(P3D_CONFIG_DEFAULTS); setMessage('') }}
+        >
+          Reset to defaults
+        </button>
+        <button className="btn btn-primary" type="button" disabled={saving} onClick={save}>
+          {saving ? 'Saving…' : 'Save changes'}
+        </button>
+      </SettingsHeaderActions>
 
+      <div className="settings-masonry">
       <div className="card" style={{ marginBottom: '1rem' }}>
         <h3 style={sectionHeading}>Lighting</h3>
         <p style={sectionNote}>
@@ -431,6 +430,7 @@ export function Settings3dTab() {
             help="Turn up if fine fabrics or fine detail look grainy or choppy when zoomed out. Draws extra detail and smooths it down, at a real cost to speed - 2 draws four times the work, so nudge it up only as far as it needs to go."
           />
         </div>
+      </div>
       </div>
     </div>
   )
