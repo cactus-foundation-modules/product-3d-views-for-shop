@@ -7,6 +7,7 @@ import { SettingsHeaderActions, SettingsHeaderStatus } from '@/components/admin/
 // in the browser bundle, where its module-scope extension throws and takes the
 // whole admin Settings page down.
 import { P3D_CONFIG_DEFAULTS, type P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config-shared'
+import { InfoTip } from '@/components/admin/InfoTip'
 
 // The 3D Viewer sub-tab, hosted inside shop's settings tab via the
 // 'shop.settings-sub-tabs' slot (manifest `host`). Shop gives it the space and
@@ -14,10 +15,7 @@ import { P3D_CONFIG_DEFAULTS, type P3dConfig } from '@/modules/product-3d-views-
 // check, its own module's API. Shop's "Save settings" button stands down while
 // this is showing, because it would not save any of this.
 
-const sectionHeading: React.CSSProperties = { margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 600 }
 const sectionNote: React.CSSProperties = { margin: '0 0 1rem', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }
-const checkboxRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-3)', cursor: 'pointer' }
-const fieldGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: 'var(--form-gap)' }
 const hint: React.CSSProperties = { display: 'block', marginTop: '0.25rem', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }
 
 const TONE_MAPPING_LABELS: Record<P3dConfig['toneMapping'], string> = {
@@ -58,7 +56,7 @@ function SliderField({
   help?: string
 }) {
   return (
-    <div className="field" style={{ margin: 0, opacity: disabled ? 0.5 : 1 }}>
+    <div className="field" style={{ opacity: disabled ? 0.5 : 1 }}>
       <label>
         {label} <span style={{ color: 'var(--color-text-secondary)', fontWeight: 400 }}>{value}</span>
       </label>
@@ -163,25 +161,20 @@ export function Settings3dTab() {
 
       <div className="settings-masonry">
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3 style={sectionHeading}>Lighting</h3>
+        <h3 className="card-title">Lighting</h3>
         <p style={sectionNote}>
           The studio environment is what makes chrome, steel and glass look like metal rather than black
           plastic. Turn it down and shiny products go dark.
         </p>
 
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input type="checkbox" checked={config.shadowsEnabled} onChange={(e) => set('shadowsEnabled', e.target.checked)} />
           Cast a shadow under the model
+          <InfoTip>Grounds the model instead of leaving it floating. Worth a look at your own products first: a model whose picture already has a shadow painted into it will end up with two. Shadows are on the main viewer only, never the little spinning thumbnails, where they would cost real speed for something too small to see.</InfoTip>
         </label>
-        <p style={{ ...sectionNote, marginTop: '-0.5rem' }}>
-          Grounds the model instead of leaving it floating. Worth a look at your own products first: a model
-          whose picture already has a shadow painted into it will end up with two. Shadows are on the main
-          viewer only, never the little spinning thumbnails, where they would cost real speed for something
-          too small to see.
-        </p>
 
-        <div style={fieldGrid}>
-          <div className="field" style={{ margin: 0, opacity: config.shadowsEnabled ? 1 : 0.5 }}>
+        <div className="settings-fields">
+          <div className="field" style={{ opacity: config.shadowsEnabled ? 1 : 0.5 }}>
             <label>Shadow edge</label>
             <select
               value={config.shadowSoftness}
@@ -203,8 +196,8 @@ export function Settings3dTab() {
           />
         </div>
 
-        <div style={fieldGrid}>
-          <div className="field" style={{ margin: 0 }}>
+        <div className="settings-fields">
+          <div className="field">
             <label>Colour handling</label>
             <select value={config.toneMapping} onChange={(e) => set('toneMapping', e.target.value as P3dConfig['toneMapping'])}>
               {Object.entries(TONE_MAPPING_LABELS).map(([key, label]) => (
@@ -227,7 +220,7 @@ export function Settings3dTab() {
           />
         </div>
 
-        <div style={fieldGrid}>
+        <div className="settings-fields">
           <SliderField label="Studio environment" value={config.environmentIntensity} min={0} max={3} step={0.05} onChange={(v) => set('environmentIntensity', v)} />
           <SliderField label="Overall light" value={config.ambientIntensity} min={0} max={5} step={0.05} onChange={(v) => set('ambientIntensity', v)} />
           <SliderField label="Main light" value={config.keyLightIntensity} min={0} max={5} step={0.05} onChange={(v) => set('keyLightIntensity', v)} />
@@ -236,11 +229,11 @@ export function Settings3dTab() {
       </div>
 
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3 style={sectionHeading}>Stage</h3>
+        <h3 className="card-title">Stage</h3>
         <p style={sectionNote}>What sits behind the model in the main viewer.</p>
 
-        <div style={fieldGrid}>
-          <div className="field" style={{ margin: 0 }}>
+        <div className="settings-fields">
+          <div className="field">
             <label>Background</label>
             <select value={config.background} onChange={(e) => set('background', e.target.value as P3dConfig['background'])}>
               {Object.entries(BACKGROUND_LABELS).map(([key, label]) => (
@@ -249,7 +242,7 @@ export function Settings3dTab() {
             </select>
             <span style={hint}>Transparent suits most themes, and follows your light and dark modes for free.</span>
           </div>
-          <div className="field" style={{ margin: 0, opacity: config.background === 'colour' ? 1 : 0.5 }}>
+          <div className="field" style={{ opacity: config.background === 'colour' ? 1 : 0.5 }}>
             <label>Background colour</label>
             <input
               type="color"
@@ -260,7 +253,7 @@ export function Settings3dTab() {
             />
             <span style={hint}>Used only when the background is set to a solid colour, for shoppers in light mode.</span>
           </div>
-          <div className="field" style={{ margin: 0, opacity: config.background === 'colour' ? 1 : 0.5 }}>
+          <div className="field" style={{ opacity: config.background === 'colour' ? 1 : 0.5 }}>
             <label>Background colour (dark mode)</label>
             <input
               type="color"
@@ -275,19 +268,19 @@ export function Settings3dTab() {
       </div>
 
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3 style={sectionHeading}>Handling</h3>
+        <h3 className="card-title">Handling</h3>
         <p style={sectionNote}>
           How the model behaves when a shopper takes hold of it. Anyone who has asked their device for less
           movement gets a still model regardless of the spin settings.
         </p>
 
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input type="checkbox" checked={config.autoRotate} onChange={(e) => set('autoRotate', e.target.checked)} />
           Move the model by itself until the shopper grabs it
         </label>
-        <div style={fieldGrid}>
-          <div className="field" style={{ margin: 0, opacity: config.autoRotate ? 1 : 0.5 }}>
-            <label>How it moves</label>
+        <div className="settings-fields">
+          <div className="field" style={{ opacity: config.autoRotate ? 1 : 0.5 }}>
+            <label>How it moves <InfoTip>Either way the model only moves while the shopper is actually looking at it - scroll it off the screen, or switch tabs, and it stops until they come back. Pick the single turn if shoppers on older phones tell you the page runs warm.</InfoTip></label>
             <select
               value={config.autoRotateStyle}
               disabled={!config.autoRotate}
@@ -297,11 +290,6 @@ export function Settings3dTab() {
                 <option key={key} value={key}>{label}</option>
               ))}
             </select>
-            <span style={hint}>
-              Either way the model only moves while the shopper is actually looking at it - scroll it off the
-              screen, or switch tabs, and it stops until they come back. Pick the single turn if shoppers on
-              older phones tell you the page runs warm.
-            </span>
           </div>
           <SliderField
             label="How far it turns"
@@ -312,27 +300,21 @@ export function Settings3dTab() {
             help="Degrees, for the single turn only. Around 40 shows depth without presenting the back of the product."
           />
         </div>
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input
             type="checkbox"
             checked={config.spinModel}
             onChange={(e) => set('spinModel', e.target.checked)}
           />
           Spin the model itself, and leave its shadow where it is
+          <InfoTip>Off, everything moves together: the idle spin and a shopper&rsquo;s drag both swing the view around the model, so its shadow appears to travel round with it. On, the model itself turns on the spot - idling or dragged sideways - while the shadow stays anchored to the floor beneath, changing shape as the model turns, which is what makes the turning obvious. Dragging up and down still tilts the view. Needs shadows switched on above to be worth anything.</InfoTip>
         </label>
-        <p style={{ ...sectionNote, marginTop: '-0.5rem' }}>
-          Off, everything moves together: the idle spin and a shopper&rsquo;s drag both swing the view around
-          the model, so its shadow appears to travel round with it. On, the model itself turns on the spot -
-          idling or dragged sideways - while the shadow stays anchored to the floor beneath, changing shape as
-          the model turns, which is what makes the turning obvious. Dragging up and down still tilts the view.
-          Needs shadows switched on above to be worth anything.
-        </p>
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input type="checkbox" checked={config.enablePan} onChange={(e) => set('enablePan', e.target.checked)} />
           Let the shopper slide the model around
         </label>
 
-        <div style={fieldGrid}>
+        <div className="settings-fields">
           <SliderField
             label="Turn speed"
             value={config.autoRotateSpeed}
@@ -373,20 +355,20 @@ export function Settings3dTab() {
       </div>
 
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3 style={sectionHeading}>View in your room (AR)</h3>
-        <p style={sectionNote}>
-          Adds a &ldquo;View in your room&rdquo; button to the main viewer that stands the product on the
-          shopper&rsquo;s own floor through their phone&rsquo;s camera. It shows up only on phones that can do
-          it, and only on models it can handle, so there is nothing to see on a desktop. Nothing extra is
-          uploaded: whatever finish the shopper has picked is what appears in the room.
-        </p>
+        <h3 className="card-title">
+          View in your room (AR)
+          <InfoTip>
+            Adds a &ldquo;View in your room&rdquo; button that stands the product on the shopper&rsquo;s floor
+            through their phone&rsquo;s camera. It only appears on phones and models that support it, so there
+            is nothing to see on a desktop.
+          </InfoTip>
+        </h3>
 
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input type="checkbox" checked={config.arEnabled} onChange={(e) => set('arEnabled', e.target.checked)} />
           Offer &ldquo;View in your room&rdquo; where the phone supports it
         </label>
 
-        <div style={fieldGrid}>
           <SliderField
             label="Real-world size"
             value={config.arRealWorldMetres}
@@ -395,26 +377,25 @@ export function Settings3dTab() {
             onChange={(v) => set('arRealWorldMetres', v)}
             help="The product's longest side, in metres, when it first lands on the floor. The shopper can pinch to fine-tune from there. Around 1 suits most furniture."
           />
-        </div>
       </div>
 
       <div className="card">
-        <h3 style={sectionHeading}>Speed</h3>
+        <h3 className="card-title">Speed</h3>
         <p style={sectionNote}>
           Worth turning down only if shoppers on older phones report the viewer struggling. On anything
           modern the defaults are free.
         </p>
 
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input type="checkbox" checked={config.antialias} onChange={(e) => set('antialias', e.target.checked)} />
           Smooth the model&rsquo;s edges
         </label>
-        <label style={checkboxRow}>
+        <label className="settings-check">
           <input type="checkbox" checked={config.thumbnailAutoRotate} onChange={(e) => set('thumbnailAutoRotate', e.target.checked)} />
           Spin the small 3D thumbnails in the picture strip
         </label>
 
-        <div style={fieldGrid}>
+        <div className="settings-fields">
           <SliderField
             label="Sharpness limit"
             value={config.pixelRatioCap}
@@ -427,7 +408,7 @@ export function Settings3dTab() {
             value={config.superSampling}
             min={1} max={2} step={0.25}
             onChange={(v) => set('superSampling', v)}
-            help="Turn up if fine fabrics or fine detail look grainy or choppy when zoomed out. Draws extra detail and smooths it down, at a real cost to speed - 2 draws four times the work, so nudge it up only as far as it needs to go."
+            help="Turn up if fine detail looks grainy when zoomed out. 2 draws four times the work, so raise it only as far as needed."
           />
         </div>
       </div>
