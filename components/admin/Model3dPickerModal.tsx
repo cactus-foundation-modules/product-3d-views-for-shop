@@ -86,14 +86,14 @@ export function Model3dPickerModal({ productId, targetProductId, targetLabel, on
 
   // Media scoped to the current folder, or spanning every folder while
   // searching, then a client-side format filter: 3D models are the non-image
-  // uploads whose extension this module knows. type has no 3D value of its own,
-  // so "other" is the nearest cut the server can make and the extension test
-  // does the rest. Debounced so typing doesn't hammer the endpoint per key.
+  // uploads whose extension this module knows. The library has a 3D type of its
+  // own ("model"; "other" excludes it), and the extension test narrows that to
+  // the formats this module can render. Debounced so typing doesn't hammer the endpoint per key.
   const trimmed = query.trim()
   useEffect(() => {
     if (folderId === undefined) return
     let cancelled = false
-    const params = new URLSearchParams({ perPage: '100', type: 'other' })
+    const params = new URLSearchParams({ perPage: '100', type: 'model' })
     if (trimmed) {
       params.set('folder', 'all')
       params.set('q', trimmed)
