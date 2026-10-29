@@ -20,9 +20,10 @@ import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/li
 //    nothing is chosen. That is a decision someone made about this range - "the
 //    oak one is the one worth showing" - rather than the module guessing, which
 //    is the difference between it and the case above. The host keeps the list up
-//    until a whole combination resolves and empties it from then on, so a
-//    part-made choice leaves the opening view alone rather than swapping the
-//    model out from under the shopper; a chosen variation wins outright, below.
+//    until a whole combination resolves and empties it from then on; a chosen
+//    variation wins outright, below. (A part-made choice is handled by the
+//    caller, not here: it passes the first matching variation with a model -
+//    previewModelProductId - as though it were chosen.)
 //  - Once a variation carrying its own model is chosen, that model replaces the
 //    product's own rather than sitting beside it. The chosen model is the exact
 //    thing being bought; the generic one is then a second, near-identical
@@ -73,4 +74,22 @@ function dedupeByUrl(items: P3dItem[]): P3dItem[] {
     out.push(item)
   }
   return out
+}
+
+// Which variation's model stands in while the shopper is part-way through the
+// options. The host hands over every variation still matching the picks so far,
+// in the owner's matrix order (`previewProductIds`); this is the first of them
+// with a model of its own. Picking "Walnut" therefore puts a walnut model on the
+// stage before the size is settled, rather than leaving the opening view up until
+// every option is answered.
+//
+// Null when none of them has a model - the caller then carries on exactly as it
+// did before the host sent the list, which is also what an older host sending
+// nothing gets.
+export function previewModelProductId(payload: P3dPayload, previewProductIds: string[] = []): string | null {
+  if (previewProductIds.length === 0) return null
+  const withModel = new Set(
+    payload.items.filter((i) => i.productId !== payload.parentProductId).map((i) => i.productId),
+  )
+  return previewProductIds.find((id) => withModel.has(id)) ?? null
 }

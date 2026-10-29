@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
+import { previewModelProductId, visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
 import { P3D_CONFIG_DEFAULTS } from '@/modules/product-3d-views-for-shop/lib/config'
 import type { P3dItem, P3dPayload } from '@/modules/product-3d-views-for-shop/lib/types'
 
@@ -151,5 +151,40 @@ describe('visibleItems', () => {
       const p = payload([item('own', PARENT, '/own.glb'), item('oak', OAK, '/oak.glb')])
       expect(keys(visibleItems(p, null))).toEqual(['own'])
     })
+  })
+})
+
+describe('previewModelProductId', () => {
+  const ASH = 'prod-variant-ash'
+
+  it('is null with no candidates, so an older host changes nothing', () => {
+    const p = payload([item('oak', OAK, '/oak.glb')])
+    expect(previewModelProductId(p)).toBeNull()
+    expect(previewModelProductId(p, [])).toBeNull()
+  })
+
+  // The host sends the matrix order; the first candidate with a model wins, even
+  // when an earlier one in the list has none.
+  it('picks the first candidate that has a model of its own', () => {
+    const p = payload([item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
+    expect(previewModelProductId(p, [ASH, WALNUT, OAK])).toBe(WALNUT)
+  })
+
+  it('is null when no candidate has a model', () => {
+    const p = payload([item('a', PARENT, '/a.glb'), item('oak', OAK, '/oak.glb')])
+    expect(previewModelProductId(p, [ASH, WALNUT])).toBeNull()
+  })
+
+  // The parent's own model describes the product, not a finish, so it is never
+  // the stand-in for a part-made choice.
+  it('never picks the parent', () => {
+    const p = payload([item('a', PARENT, '/a.glb')])
+    expect(previewModelProductId(p, [PARENT])).toBeNull()
+  })
+
+  it('narrows the strip to the stand-in, like a resolved choice', () => {
+    const p = payload([item('a', PARENT, '/a.glb'), item('oak', OAK, '/oak.glb'), item('walnut', WALNUT, '/walnut.glb')])
+    const stand = previewModelProductId(p, [WALNUT, OAK])
+    expect(keys(visibleItems(p, stand, [OAK]))).toEqual(['walnut'])
   })
 })

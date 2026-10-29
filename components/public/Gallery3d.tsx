@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
-import { visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
+import { previewModelProductId, visibleItems } from '@/modules/product-3d-views-for-shop/lib/visible-items'
 import { asked, freshHold, mayLead, showing, type StageHold } from '@/modules/product-3d-views-for-shop/lib/stage-hold'
 import { useModelContext } from '@/modules/product-3d-views-for-shop/lib/use-model-context'
 import { loadModel } from '@/modules/product-3d-views-for-shop/lib/three/load-model'
@@ -119,7 +119,10 @@ function Thumb3d({ item, settings, fabric, active, thumbClass, thumbOnClass, onP
   )
 }
 
-export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps) {
+// `previewProductIds` is spelled out alongside shop's contract deliberately: the
+// build gate composes this module against the shop version core currently pins,
+// which may predate the field. Same optional prop, not a second one.
+export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds = [], previewProductIds = [], activeKey, onPick, thumbClass, thumbOnClass }: ShopGalleryExtraThumbsProps & { previewProductIds?: string[] }) {
   // Packed on the wire (lib/pack/gallery-payload.ts) and unpacked here, at the
   // boundary, so everything below reads the plain P3dPayload it always has.
   const raw = readGalleryPayload(payload)
@@ -140,7 +143,13 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
   // one once a full variation resolves again (activeProductId goes non-null).
   const [lastResolved, setLastResolved] = useState<string | null>(activeProductId)
   if (activeProductId !== null && activeProductId !== lastResolved) setLastResolved(activeProductId)
-  const effectiveProductId = activeProductId ?? lastResolved
+  // Part-way through the options, the first variation still matching the picks
+  // that has a model of its own (see previewModelProductId). It beats the
+  // remembered one: the shopper has just picked something that variation may no
+  // longer match, and this is the model of what they DID pick. Null when nothing
+  // matching has a model, which leaves the remembered one standing as before.
+  const previewProductId = activeProductId === null ? previewModelProductId(data, previewProductIds) : null
+  const effectiveProductId = activeProductId ?? previewProductId ?? lastResolved
 
   // The promoted variations, which the host keeps up until a whole combination
   // resolves - so a part-made choice leaves the opening view exactly as it is
@@ -202,15 +211,19 @@ export function Gallery3dThumbs({ payload, activeProductId, featuredProductIds =
   // photograph is how a shopper says "I want to look at the pictures", and answering
   // every subsequent option change by grabbing the stage back is the module arguing
   // with them. The 3D thumbnail is still right there when they want it again.
+  //
+  // The part-made stand-in leads the same way, so picking a finish swings the
+  // stage round to that finish's model without waiting on the last option.
+  const leadProductId = activeProductId ?? previewProductId
   useEffect(() => {
-    if (activeProductId === null) return
+    if (leadProductId === null) return
     if (!mayLead(hold.current)) return
-    const own = items.find((i) => i.productId === activeProductId)
+    const own = items.find((i) => i.productId === leadProductId)
     if (own && activeKey !== own.key) ask(own.key)
-    // Keyed on the chosen variation alone; items/activeKey/ask are read as the
-    // source, not triggers, and watching them would re-lead on every render.
+    // Keyed on the variation to lead with alone; items/activeKey/ask are read as
+    // the source, not triggers, and watching them would re-lead on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProductId])
+  }, [leadProductId])
 
   // Whether the shopper has shown any interest in the 3D view yet - hovering or
   // focusing a thumbnail, or actually opening one. Until they have, the caches stay
