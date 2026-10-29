@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
-import { isS3Provider, workerUrl } from '@/lib/media/upload'
+import { directUploadTarget } from '@/lib/media/direct-upload-target'
+import { servesDirect } from '@/lib/media/serving-mode'
 import { resolveFolderPath } from '@/lib/media/organise'
 import { signUploadToken, UPLOAD_TOKEN_TTL_MS } from '@/lib/media/upload-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
 import { isValidTarget } from '@/modules/product-3d-views-for-shop/lib/db/models'
 import { resolve3dFolderId } from '@/modules/product-3d-views-for-shop/lib/media-folder'
 import { buildModelKey } from '@/modules/product-3d-views-for-shop/lib/model-key'
-import { formatFromFilename, mimeForFormat } from '@/modules/product-3d-views-for-shop/lib/formats'
+import { formatFromFilename, mimeForFormat, P3D_MAX_UPLOAD_BYTES, P3D_MAX_UPLOAD_MB } from '@/modules/product-3d-views-for-shop/lib/formats'
 
 // Hand the browser a signed target so it can PUT a model straight to the media
 // Worker, and never send the bytes through this function at all.
@@ -59,10 +60,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     )
   }
 
-  // Only the S3-compatible family takes a direct write (the Worker signs those),
-  // and only when there is a Worker to write to. Anything else falls back.
-  const base = workerUrl()
-  if (!base || !isS3Provider(provider)) return NextResponse.json({ available: false })
+  // Only the S3-compatible family takes a direct write - through the Worker, or
+  // as a presigned bucket url when the owner serves straight from the bucket
+  // (core decides; see lib/media/direct-upload-target.ts). A presigned url has
+  // the length signed into it, so the size is needed up front and must be within
+  // the ceiling; a browser that did not send one takes the form upload instead.
+  const sizeBytes = typeof body?.sizeBytes === 'number' ? body.sizeBytes : NaN
+  if (servesDirect(provider)) {
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) return NextResponse.json({ available: false })
+    if (sizeBytes > P3D_MAX_UPLOAD_BYTES) {
+      return NextResponse.json({ error: `That model is too big (max ${P3D_MAX_UPLOAD_MB} MB).` }, { status: 400 })
+    }
+  }
 
   const folderId = await resolve3dFolderId(id)
   const folderPath = folderId ? await resolveFolderPath(folderId) : ''
@@ -94,13 +103,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // 'replace' aims the upload at the object already there, so the bytes take over
   // that library row rather than starting a second one beside it.
   const key = plan.taken && onClash === 'replace' ? plan.taken.key : plan.key
+  const target = await directUploadTarget(provider, key, mimeForFormat(format), servesDirect(provider) ? sizeBytes : undefined)
+  if (!target) return NextResponse.json({ available: false })
   const { token } = signUploadToken(key, UPLOAD_TOKEN_TTL_MS)
 
   return NextResponse.json({
     available: true,
-    uploadUrl: `${base}/${key}`,
+    uploadUrl: target.uploadUrl,
     contentType: mimeForFormat(format),
     key,
     token,
+    ...(target.presigned ? { presigned: true } : {}),
   })
 }

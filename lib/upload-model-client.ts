@@ -5,6 +5,7 @@ import {
   formatFromFilename,
 } from '@/modules/product-3d-views-for-shop/lib/formats'
 import type { P3dAdminModel } from '@/modules/product-3d-views-for-shop/lib/types'
+import { directUploadHeaders } from '@/lib/media/direct-upload-headers'
 
 // Uploading one model, from either surface that offers it: the 3D views tab and
 // the Variations tab's 3D column.
@@ -30,7 +31,7 @@ async function reasonFrom(res: Response, fallback: string): Promise<string> {
 }
 
 type Ticket =
-  | { available: true; uploadUrl: string; contentType: string; key: string; token: string }
+  | { available: true; uploadUrl: string; contentType: string; key: string; token: string; presigned?: boolean }
   | { available: true; clash: { existingName: string; suggestedName: string } }
   | { available: false }
 
@@ -76,7 +77,7 @@ export async function uploadModel(
     const res = await fetch(`${base}/upload-url`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ filename: file.name, targetProductId, ...(clashChoice ? { onClash: clashChoice } : {}) }),
+      body: JSON.stringify({ filename: file.name, sizeBytes: file.size, targetProductId, ...(clashChoice ? { onClash: clashChoice } : {}) }),
     })
     if (!res.ok) throw new Error(await reasonFrom(res, 'That model could not be uploaded.'))
     return res.json()
@@ -96,17 +97,27 @@ export async function uploadModel(
 
   if (!ticket.available) return uploadThroughServer(file, base, targetProductId)
 
-  const put = await fetch(ticket.uploadUrl, {
-    method: 'PUT',
-    headers: { authorization: `Bearer ${ticket.token}`, 'content-type': ticket.contentType },
-    body: file,
-  })
+  let put: Response
+  try {
+    put = await fetch(ticket.uploadUrl, {
+      method: 'PUT',
+      headers: directUploadHeaders(ticket, ticket.contentType),
+      body: file,
+    })
+  } catch (err) {
+    // Straight to the bucket, a refusal before anything moves is nearly always
+    // its CORS rules; the browser reports nothing more than a failed fetch.
+    if (ticket.presigned) {
+      throw new Error(`“${file.name}” could not be sent to your storage bucket. Check the bucket's CORS rules with the Test CORS button in Settings → Media.`)
+    }
+    throw err
+  }
 
   if (!put.ok) {
     // A Worker deployed before it learned about 3D files turns every model away
     // with this exact status. It only picks up new code when someone redeploys it,
     // so the site owner is told what to do rather than left with "no".
-    if (put.status === 415) {
+    if (put.status === 415 && !ticket.presigned) {
       throw new Error('Your media service needs updating before it will accept 3D files. Go to Settings → Media and deploy the Worker again, then try once more.')
     }
     throw new Error(await reasonFrom(put, 'That model could not be sent to your media storage.'))

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
 import { getActiveMediaProvider, isMediaProviderConfigured } from '@/lib/config/env'
 import { resolveFolderPath } from '@/lib/media/organise'
-import { adoptReplacementBlob, autoOptimiseNewUpload, saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
+import { adoptReplacementBlob, autoOptimiseNewUpload, confirmedSizeBytes, OversizedUploadError, refuseOversizedBucketUpload, saveMediaRecord, uploadMedia, validateNonImageUpload } from '@/lib/media/upload'
+import { servesDirect } from '@/lib/media/serving-mode'
 import { verifyUploadToken } from '@/lib/media/upload-token'
 import { signAssetUrl } from '@/lib/media/asset-token'
 import { requireShopUser } from '@/modules/shop/lib/access'
@@ -122,14 +123,21 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
     // moves onto them - it keeps its id and url, and everything already pointing
     // at it picks up the new model rather than being stranded on the old one.
     const existing = await prisma.media.findUnique({ where: { key } })
+    // Straight to the bucket (direct serving mode) there was no Worker in front of
+    // the PUT to hold it to the ceiling, and the browser's word for the size is
+    // only a claim - so storage is asked, and an oversized object is removed. The
+    // replace path does the same inside adoptReplacementBlob. Worker mode skips
+    // this: the Worker has already refused anything too big.
+    const landedBytes = !existing && servesDirect(provider) ? await confirmedSizeBytes(provider, key, sizeBytes) : sizeBytes
+    if (!existing) await refuseOversizedBucketUpload(provider, key, landedBytes)
     const record = existing
       ? await adoptReplacementBlob(existing, key, mimeForFormat(format), sizeBytes, existing.originalName)
       : await saveMediaRecord({
           key,
-          url: '', // saveMediaRecord rebuilds the Worker url for proxied providers
+          url: '', // saveMediaRecord rebuilds the serving url (Worker or /api/media) for proxied providers
           provider,
           mimeType: mimeForFormat(format),
-          sizeBytes,
+          sizeBytes: landedBytes,
           uploadedById: userId,
           originalName: filename || undefined,
           folderId,
@@ -144,7 +152,7 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
     // The url and key are deliberately unaffected: an optimised GLB is written
     // back over its own storage key precisely so that rows like this one, which
     // core's reference rewriting never reaches, do not need to learn anything.
-    const storedSize = await autoOptimiseNewUpload(record.id, mimeForFormat(format), sizeBytes, userId)
+    const storedSize = await autoOptimiseNewUpload(record.id, mimeForFormat(format), existing ? sizeBytes : landedBytes, userId)
 
     const model = await createModel({
       productId: targetProductId,
@@ -165,6 +173,7 @@ async function recordDirect(body: Record<string, unknown>, id: string, provider:
     // Worker and would be refused without a token.
     return NextResponse.json({ ...model, url: signAssetUrl(model.url) }, { status: 201 })
   } catch (error) {
+    if (error instanceof OversizedUploadError) return NextResponse.json({ error: error.message }, { status: 400 })
     return NextResponse.json(
       { error: `Could not save that model: ${error instanceof Error ? error.message : 'Unknown error'}` },
       { status: 500 },
