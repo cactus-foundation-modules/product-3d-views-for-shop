@@ -205,6 +205,44 @@ describe('the click-to-open clip set', () => {
     expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
   })
 
+  it('moves every node a clip drives, and names the drawer whatever the track order', () => {
+    // A drawer and its runner rails, which travel half as far, in ONE clip - with the
+    // runner's track listed first, so nothing can lean on the drawer coming first.
+    const root = new Group()
+    const pair = (n: number): { drawer: Object3D; runner: Object3D; clip: AnimationClip } => {
+      const drawer = new Object3D()
+      drawer.name = `Drawer${n}`
+      drawer.userData = { p3dDrawer: n }
+      const handle = new Object3D()
+      handle.userData = { p3dClip: `Drawer${n}Open`, p3dGroup: 'drawers' }
+      drawer.add(handle)
+      const runner = new Object3D()
+      runner.name = `Drawer${n}Runner`
+      root.add(drawer, runner)
+      const clip = new AnimationClip(`Drawer${n}Open`, DURATION, [
+        new VectorKeyframeTrack(`${runner.name}.position`, [0, DURATION], [0, 0, 0, 0, 0, TRAVEL / 2]),
+        new VectorKeyframeTrack(`${drawer.name}.position`, [0, DURATION], [0, 0, 0, 0, 0, TRAVEL]),
+      ])
+      return { drawer, runner, clip }
+    }
+    const a = pair(1)
+    const b = pair(2)
+    const clips = [a.clip, b.clip]
+    expect(describeClips(root, clips).clips.map((c) => c.drawer)).toEqual([1, 2])
+    const set = createClipSet({ mixer: new AnimationMixer(root), root, clips, loopOnce: LoopOnce })
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    expect(z(a.drawer)).toBeCloseTo(TRAVEL, 5)
+    expect(z(a.runner)).toBeCloseTo(TRAVEL / 2, 5)
+    // Opening the other sends this drawer AND its runner home together.
+    set.press('Drawer2Open', false)
+    runToRest(set)
+    expect(z(a.drawer)).toBeCloseTo(0, 5)
+    expect(z(a.runner)).toBeCloseTo(0, 5)
+    expect(z(b.drawer)).toBeCloseTo(TRAVEL, 5)
+    expect(z(b.runner)).toBeCloseTo(TRAVEL / 2, 5)
+  })
+
   it('ignores a clip it does not know', () => {
     const set = setFor(cabinet(1))
     expect(set.press('Nope', false)).toBe(false)

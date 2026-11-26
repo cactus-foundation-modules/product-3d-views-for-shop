@@ -95,19 +95,24 @@ export function clipForHit(hit: Object3D | null, root: Object3D): string | null 
   return null
 }
 
-/** The node a clip's tracks drive. Track names are `<node>.<property>`, and three strips dots out of node names. */
-function animatedNode(clip: AnimationClip, root: Object3D): Object3D | null {
-  for (const track of clip.tracks) {
-    const name = track.name.slice(0, track.name.indexOf('.'))
-    const node = name ? root.getObjectByName(name) : undefined
-    if (node) return node
-  }
-  return null
-}
-
-function drawerNumber(node: Object3D | null): number | null {
+function drawerNumber(node: Object3D | null | undefined): number | null {
   const value = node?.userData?.[DRAWER_KEY]
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * The drawer number of whichever node the clip drives carries one. A clip can move
+ * several nodes (a drawer and the runner rails that travel half as far with it), in
+ * any track order, so every track is checked rather than the first. Track names are
+ * `<node>.<property>`, and three strips dots out of node names.
+ */
+function clipDrawerNumber(clip: AnimationClip, root: Object3D): number | null {
+  for (const track of clip.tracks) {
+    const name = track.name.slice(0, track.name.indexOf('.'))
+    const drawer = name ? drawerNumber(root.getObjectByName(name)) : null
+    if (drawer !== null) return drawer
+  }
+  return null
 }
 
 /** Read what the file says about each of its clips. Pure, no mixer: split out so it can be tested and reasoned about alone. */
@@ -128,7 +133,7 @@ export function describeClips(root: Object3D, clips: AnimationClip[]): { clips: 
       name: clip.name,
       group: targets.get(clip.name) ?? null,
       clickable: targets.has(clip.name),
-      drawer: drawerNumber(animatedNode(clip, root)),
+      drawer: clipDrawerNumber(clip, root),
     })),
   }
 }
