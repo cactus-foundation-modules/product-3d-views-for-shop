@@ -5,8 +5,9 @@
 // rule: every clip is LoopOnce + clampWhenFinished, forwards opens, timeScale -1
 // closes, and a reversal picks the part up wherever it stands. What this adds is
 // that each clip has its OWN direction, and that clips can be made mutually
-// exclusive: opening one drawer sends every other open drawer in its group home at
-// the same moment, so the two travel together.
+// exclusive: opening one drawer sends every other open drawer in its group home, and
+// the new one WAITS until that drawer has finished closing before it opens, so the
+// two never travel together (reduced motion skips the wait).
 //
 // The file decides all of it. A node whose glTF extras read
 //   { "p3dClip": "Drawer1Open", "p3dGroup": "drawers" }
@@ -39,11 +40,14 @@ export type ClipSet = {
   clips: ClipInfo[]
   /** How many nodes in the file carry a drawer number - so 1 of 3 can read "top" and 3 of 3 "bottom". */
   drawerCount: number
-  /** Where a clip is HEADING: true from the press that opens it, not from the frame it finishes on. */
+  /** Where a clip is HEADING: true from the press that opens it (even while it waits its turn), not from the frame it finishes on. */
   isOpen: (clip: string) => boolean
   /**
    * Flip one clip's direction from wherever it stands. Opening it also closes every
-   * other open clip in its group, simultaneously. Returns the new intent.
+   * other open clip in its group; it then waits as the group's one pending clip and
+   * starts opening when the last of them is home. Pressing the pending clip again
+   * cancels it; pressing another replaces it; pressing the drawer still closing
+   * re-opens that one and drops the pending clip. Returns the new intent.
    *
    * @param instant land on the end poses without travelling (reduced motion)
    */
@@ -162,6 +166,17 @@ export function createClipSet({ mixer, root, clips, loopOnce }: ClipSetDeps): Cl
   }))
 
   const open = new Map(clips.map((clip) => [clip.name, false]))
+  // At most one queued opener per group: group -> clip waiting for the others to close.
+  const pending = new Map<string, string>()
+  const isPending = (name: string): boolean => {
+    for (const queued of pending.values()) if (queued === name) return true
+    return false
+  }
+  // Open, or still travelling either way. A closed clip is paused (clampWhenFinished
+  // pauses it on reaching time 0), so `paused` is the robust "has it landed" test.
+  const busy = (name: string): boolean => open.get(name) === true || actions.get(name)?.paused === false
+  const othersBusy = (group: string, except: string): boolean =>
+    described.clips.some((c) => c.group === group && c.name !== except && busy(c.name))
 
   // Send one clip a given way. Travelling: unpause and point the timeScale. Instant:
   // park it at that end; the caller applies the pose with a zero-length mixer tick.
@@ -182,39 +197,77 @@ export function createClipSet({ mixer, root, clips, loopOnce }: ClipSetDeps): Cl
   return {
     clips: described.clips,
     drawerCount: described.drawerCount,
-    isOpen: (name) => open.get(name) === true,
+    isOpen: (name) => open.get(name) === true || isPending(name),
 
     press: (name, instant) => {
       if (!actions.has(name)) return false
-      const next = !open.get(name)
       const group = info.get(name)?.group ?? null
-      // Only OPENING closes the others. Closing the open drawer leaves its siblings
-      // alone - they are already shut, or (mid-mash) already on their way home.
-      if (next && group !== null) {
-        for (const other of described.clips) {
-          if (other.name !== name && other.group === group && open.get(other.name)) {
-            steer(other.name, false, instant)
+
+      if (group === null) {
+        const next = !open.get(name)
+        steer(name, next, instant)
+        if (instant) mixer.update(0)
+        return next
+      }
+
+      if (instant) {
+        // Reduced motion: no waiting. Close the others, open this one, all at once.
+        pending.delete(group)
+        const next = !open.get(name)
+        if (next) {
+          for (const other of described.clips) {
+            if (other.name !== name && other.group === group && busy(other.name)) steer(other.name, false, true)
           }
         }
+        steer(name, next, true)
+        mixer.update(0)
+        return next
       }
-      steer(name, next, instant)
-      // A paused action reads its own `time`, so a zero tick writes the instant
-      // poses and moves nothing that is travelling.
-      if (instant) mixer.update(0)
-      return next
+
+      // Pressing the queued clip again cancels it.
+      if (pending.get(group) === name) {
+        pending.delete(group)
+        return false
+      }
+      // Open or opening: close it (from wherever it stands).
+      if (open.get(name)) {
+        steer(name, false, false)
+        return false
+      }
+      // Closed, maybe still closing. Close any open sibling, then open now if the
+      // group is clear, else queue behind whatever is still travelling home.
+      for (const other of described.clips) {
+        if (other.name !== name && other.group === group && open.get(other.name)) steer(other.name, false, false)
+      }
+      if (!othersBusy(group, name)) {
+        pending.delete(group)
+        steer(name, true, false)
+        return true
+      }
+      pending.set(group, name)
+      return true
     },
 
     update: (delta) => {
       // ONE mixer tick for every clip: ticking per clip would run the mixer once per
       // drawer per frame and send them all at several times their authored speed.
-      let moving = false
+      let moving = pending.size > 0
       for (const action of actions.values()) if (!action.paused) { moving = true; break }
       if (!moving) return false
       mixer.update(delta)
+      // Once the last sibling has landed, the queued clip starts. Checked after the
+      // tick so a clip that reached time 0 this frame releases it this frame.
+      for (const [group, queued] of [...pending]) {
+        if (!othersBusy(group, queued)) {
+          pending.delete(group)
+          steer(queued, true, false)
+        }
+      }
       return true
     },
 
     sampleOpenPose: (name, measure) => {
+      const savedPending = new Map(pending)
       const saved = [...actions].map(([clip, action]) => ({ action, time: action.time, paused: action.paused, open: clip === name }))
       for (const s of saved) {
         s.action.paused = true
@@ -232,6 +285,8 @@ export function createClipSet({ mixer, root, clips, loopOnce }: ClipSetDeps): Cl
         }
         mixer.update(0)
         for (const s of saved) s.action.paused = s.paused
+        pending.clear()
+        for (const [group, queued] of savedPending) pending.set(group, queued)
       }
     },
   }

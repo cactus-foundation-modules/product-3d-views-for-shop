@@ -114,7 +114,7 @@ describe('the click-to-open clip set', () => {
     expect(frames).toBeLessThanOrEqual(Math.ceil(DURATION * 60) + 1)
   })
 
-  it('closes the open drawer when another in its group opens, both moving together', () => {
+  it('closes the open drawer first, then opens the next one - never both at once', () => {
     const c = cabinet(3)
     const set = setFor(c)
     set.press('Drawer1Open', false)
@@ -122,15 +122,84 @@ describe('the click-to-open clip set', () => {
     set.press('Drawer3Open', false)
     expect(set.isOpen('Drawer1Open')).toBe(false)
     expect(set.isOpen('Drawer3Open')).toBe(true)
-    // Halfway: one on its way in, the other on its way out.
-    for (let i = 0; i < 21; i++) set.update(1 / 60)
+    // Closing drawer travels; the waiting one has not moved.
+    for (let i = 0; i < 10; i++) {
+      set.update(1 / 60)
+      expect(z(c.drawers[2]!)).toBe(0)
+    }
     expect(z(c.drawers[0]!)).toBeGreaterThan(0)
     expect(z(c.drawers[0]!)).toBeLessThan(TRAVEL)
-    expect(z(c.drawers[2]!)).toBeGreaterThan(0)
-    expect(z(c.drawers[2]!)).toBeLessThan(TRAVEL)
-    runToRest(set)
+    let overlap = false
+    for (let i = 0; i < 300 && set.update(1 / 60); i++) {
+      if (z(c.drawers[0]!) > 1e-6 && z(c.drawers[2]!) > 1e-6) overlap = true
+    }
+    expect(overlap).toBe(false)
     expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
     expect(z(c.drawers[2]!)).toBeCloseTo(TRAVEL, 5)
+  })
+
+  it('keeps the render loop ticking while a drawer is queued', () => {
+    const c = cabinet(2)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    set.press('Drawer2Open', false)
+    expect(set.update(1 / 60)).toBe(true)
+  })
+
+  it('opens at once when nothing in the group is open', () => {
+    const c = cabinet(2)
+    const set = setFor(c)
+    set.press('Drawer2Open', false)
+    set.update(1 / 60)
+    expect(z(c.drawers[1]!)).toBeGreaterThan(0)
+  })
+
+  it('replaces the pending drawer when a different one is pressed', () => {
+    const c = cabinet(3)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    set.press('Drawer2Open', false)
+    set.press('Drawer3Open', false)
+    expect(set.isOpen('Drawer2Open')).toBe(false)
+    expect(set.isOpen('Drawer3Open')).toBe(true)
+    runToRest(set)
+    expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[1]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[2]!)).toBeCloseTo(TRAVEL, 5)
+  })
+
+  it('cancels the pending drawer when it is pressed again', () => {
+    const c = cabinet(2)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    set.press('Drawer2Open', false)
+    expect(set.press('Drawer2Open', false)).toBe(false)
+    expect(set.isOpen('Drawer2Open')).toBe(false)
+    runToRest(set)
+    expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[1]!)).toBeCloseTo(0, 5)
+    expect(set.update(1 / 60)).toBe(false)
+  })
+
+  it('re-opens the drawer still closing from where it stands, and drops the pending one', () => {
+    const c = cabinet(2)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    set.press('Drawer2Open', false)
+    for (let i = 0; i < 10; i++) set.update(1 / 60)
+    const mid = z(c.drawers[0]!)
+    expect(set.press('Drawer1Open', false)).toBe(true)
+    expect(set.isOpen('Drawer2Open')).toBe(false)
+    set.update(1 / 60)
+    expect(z(c.drawers[0]!)).toBeGreaterThan(mid)
+    expect(z(c.drawers[0]!)).toBeLessThan(mid + TRAVEL / 10)
+    runToRest(set)
+    expect(z(c.drawers[0]!)).toBeCloseTo(TRAVEL, 5)
+    expect(z(c.drawers[1]!)).toBe(0)
   })
 
   it('closes the open drawer when it is pressed again', () => {
@@ -154,6 +223,7 @@ describe('the click-to-open clip set', () => {
     expect(z(c.drawers[0]!)).toBeLessThan(mid)
     expect(z(c.drawers[0]!)).toBeGreaterThan(mid - TRAVEL / 10)
     set.press('Drawer2Open', false)
+    expect(set.isOpen('Drawer2Open')).toBe(true)
     set.press('Drawer1Open', false)
     expect(set.isOpen('Drawer2Open')).toBe(false)
     expect(set.isOpen('Drawer1Open')).toBe(true)
@@ -184,6 +254,20 @@ describe('the click-to-open clip set', () => {
     expect(set.update(1 / 60)).toBe(false)
   })
 
+  it('skips the wait under reduced motion even with a drawer queued', () => {
+    const c = cabinet(3)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    set.press('Drawer2Open', false)
+    set.press('Drawer3Open', true)
+    expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[1]!)).toBe(0)
+    expect(z(c.drawers[2]!)).toBeCloseTo(TRAVEL, 5)
+    expect(set.isOpen('Drawer2Open')).toBe(false)
+    expect(set.update(1 / 60)).toBe(false)
+  })
+
   it('samples one-open poses and puts everything back as it was', () => {
     const c = cabinet(3)
     const set = setFor(c)
@@ -196,6 +280,24 @@ describe('the click-to-open clip set', () => {
     expect(z(c.drawers[2]!)).toBeCloseTo(TRAVEL, 5)
     expect(set.isOpen('Drawer3Open')).toBe(true)
     expect(set.update(1 / 60)).toBe(false)
+  })
+
+  it('restores a queued drawer and leaves no extra opens behind after sampling', () => {
+    const c = cabinet(3)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    set.press('Drawer2Open', false)
+    for (let i = 0; i < 5; i++) set.update(1 / 60)
+    const before = c.drawers.map(z)
+    set.sampleOpenPose('Drawer3Open', () => c.drawers.map(z))
+    expect(c.drawers.map(z)).toEqual(before)
+    expect(set.isOpen('Drawer2Open')).toBe(true)
+    expect(set.isOpen('Drawer3Open')).toBe(false)
+    runToRest(set)
+    expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[1]!)).toBeCloseTo(TRAVEL, 5)
+    expect(z(c.drawers[2]!)).toBe(0)
   })
 
   it('restores the pose even when the measurement throws', () => {
@@ -234,7 +336,7 @@ describe('the click-to-open clip set', () => {
     runToRest(set)
     expect(z(a.drawer)).toBeCloseTo(TRAVEL, 5)
     expect(z(a.runner)).toBeCloseTo(TRAVEL / 2, 5)
-    // Opening the other sends this drawer AND its runner home together.
+    // Opening the other sends this drawer AND its runner home first.
     set.press('Drawer2Open', false)
     runToRest(set)
     expect(z(a.drawer)).toBeCloseTo(0, 5)
