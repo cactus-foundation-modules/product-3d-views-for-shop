@@ -92,6 +92,27 @@ export const viewerChromeCss = `
 .p3d-animate{right:8px;bottom:8px}
 .p3d-animate:hover,.p3d-animate:focus-visible{opacity:1}
 .p3d-stage.p3d-has-animation .p3d-reset{bottom:38px}
+/* Click-to-open parts: one real button per part, for the keyboard and screen readers
+   the canvas clicks cannot reach. Top-left, the one corner nothing else uses. Held out
+   of sight (but not out of the accessibility tree) until focus lands inside, unless
+   some part has no click target and these are its only control. */
+.p3d-parts{position:absolute;left:8px;top:8px;z-index:3;display:flex;flex-direction:column;
+  align-items:flex-start;gap:4px}
+.p3d-parts:not(.p3d-parts-shown):not(:focus-within){width:1px;height:1px;overflow:hidden;
+  clip-path:inset(50%);white-space:nowrap}
+.p3d-part{cursor:pointer;border:none;font-family:inherit;font-size:11px;font-weight:600;line-height:1;
+  padding:6px 10px;border-radius:999px;background:var(--color-fg);color:var(--color-bg);opacity:.85;
+  white-space:nowrap;transition:opacity .15s ease}
+.p3d-part:hover,.p3d-part:focus-visible{opacity:1}
+.p3d-part:focus-visible{outline:2px solid var(--color-border-focus);outline-offset:2px}
+.p3d-part[aria-pressed="true"]{box-shadow:inset 0 0 0 2px var(--color-bg)}
+/* The tag beside the mouse over a clickable part. Solid, not translucent, with a soft
+   shadow, so it reads the same over a pale oak and a black ash. Positioned by
+   transform from the pointer handlers; never catches the pointer itself. */
+.p3d-hover-tag{position:absolute;left:0;top:0;z-index:4;pointer-events:none;
+  font-family:inherit;font-size:11px;font-weight:600;line-height:1;padding:5px 8px;border-radius:999px;
+  background:var(--color-fg);color:var(--color-bg);box-shadow:0 1px 4px rgba(0,0,0,.25);white-space:nowrap}
+.p3d-hover-tag[hidden]{display:none}
 .p3d-ar-icon{flex:none}
 /* Apple requires an <img> child inside the rel="ar" anchor, but ours is only there
    to satisfy that - the visible glyph is the SVG. Kept in the layout at zero size
@@ -136,7 +157,7 @@ export const viewerChromeCss = `
   .p3d-material-wait::before{animation:none}
   .p3d-material-spinner{animation:none;border-top-color:var(--color-bg);opacity:.5}
 }
-@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar,.p3d-animate,.p3d-expand-open,.p3d-expand-close{transition:none}}
+@media (prefers-reduced-motion:reduce){.p3d-reset,.p3d-ar,.p3d-animate,.p3d-part,.p3d-expand-open,.p3d-expand-close{transition:none}}
 @media (prefers-reduced-motion:reduce){.p3d-stage-canvas{cursor:default}}
 `
 

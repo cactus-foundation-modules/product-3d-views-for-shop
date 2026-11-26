@@ -41,3 +41,66 @@ export function animationLabel(clipName: string, open: boolean): string {
   // Offers the way back. Pressed open, the useful thing to say next is "Close".
   return open ? wording.close : wording.open
 }
+
+// The small tag that follows the mouse over a part that opens when clicked. Short on
+// purpose: it sits beside the cursor, and the part under it already says what it is.
+const HOVER = { open: 'Open', close: 'Close' }
+
+/**
+ * The hover tag beside the cursor over a click-to-open part.
+ *
+ * @param open where that part's clip is heading: true while open or opening
+ */
+export function hoverLabel(open: boolean): string {
+  return open ? HOVER.close : HOVER.open
+}
+
+// Where a numbered drawer sits, for the accessible buttons. Drawer 1 is the top one
+// (the file's own convention), so the last one is the bottom.
+const ORDINALS = ['second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']
+
+function drawerName(drawer: number, count: number): string {
+  if (count <= 1) return 'the drawer'
+  if (drawer === 1) return 'the top drawer'
+  if (drawer === count) return 'the bottom drawer'
+  if (count === 3 && drawer === 2) return 'the middle drawer'
+  const ordinal = ORDINALS[drawer - 2]
+  return ordinal ? `the ${ordinal} drawer` : `drawer ${drawer}`
+}
+
+/**
+ * Split a clip name into words for a label: `Drawer1Open` -> "drawer 1",
+ * `lid_open` -> "lid". A trailing "open" is the verb, which the label supplies.
+ */
+function clipThing(clipName: string): { thing: string; opens: boolean } {
+  const words = clipName
+    .replace(/([a-z])([A-Z0-9])/g, '$1 $2')
+    .replace(/([0-9])([A-Za-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase())
+  // Only a clip that SAYS it opens something gets "Open ..." - the same refusal to
+  // guess as NEUTRAL above: a clip called ColumnUp is not opening anything.
+  const opens = words.length > 1 && words[words.length - 1] === 'open'
+  if (opens) words.pop()
+  return { thing: words.join(' '), opens }
+}
+
+/**
+ * The label for one part's own button, on a model whose parts open one at a time.
+ * A file-marked drawer is named by position ("Open the top drawer"); a clip in the
+ * wording table above uses that; anything else is named from the clip itself.
+ *
+ * @param clip the clip's name, and its drawer number and the file's drawer count if marked
+ * @param open where the clip is heading
+ */
+export function partLabel(clip: { name: string; drawer: number | null }, drawerCount: number, open: boolean): string {
+  const verb = open ? 'Close' : 'Open'
+  if (clip.drawer !== null) return `${verb} ${drawerName(clip.drawer, drawerCount)}`
+  const known = WORDING[key(clip.name)]
+  if (known) return open ? known.close : known.open
+  const { thing, opens } = clipThing(clip.name)
+  if (!thing) return animationLabel(clip.name, open)
+  if (opens) return `${verb} ${thing}`
+  return `${open ? NEUTRAL.close : NEUTRAL.open}: ${thing}`
+}

@@ -21,7 +21,8 @@ import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disp
 import { detectArSupport, bakeUsdzUrl, startWebXrAr, type ArKind } from '@/modules/product-3d-views-for-shop/lib/three/ar'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 import { createAnimationToggle, type AnimationToggle } from '@/modules/product-3d-views-for-shop/lib/three/animation-toggle'
-import { animationLabel } from '@/modules/product-3d-views-for-shop/lib/animation-labels'
+import { createClipSet, clipForHit, hasClickTargets, type ClipInfo, type ClipSet } from '@/modules/product-3d-views-for-shop/lib/three/clip-set'
+import { animationLabel, hoverLabel, partLabel } from '@/modules/product-3d-views-for-shop/lib/animation-labels'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
 
@@ -306,6 +307,25 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     invalidateRef.current?.()
   }, [])
 
+  // The other shape a file's animation can take: parts that open one at a time, each
+  // by clicking the part itself (see lib/three/clip-set.ts for the file contract). A
+  // file opts in by marking a node with `extras.p3dClip`; one that does gets no stage
+  // button for those clips, and the clicks are the control.
+  //
+  // partsRef is the live clip set, in build()'s closure like animRef. parts is what
+  // the file says about its clips, in state because it decides whether the
+  // accessible buttons exist at all. partsOpen is where each clip is heading, which
+  // the buttons' labels and aria-pressed read. pressPartRef is the press itself,
+  // set by build() because it also has to update the hover tag and ask for a frame.
+  const partsRef = useRef<ClipSet | null>(null)
+  const [parts, setParts] = useState<{ clips: ClipInfo[]; drawerCount: number } | null>(null)
+  const [partsOpen, setPartsOpen] = useState<Record<string, boolean>>({})
+  const pressPartRef = useRef<((clip: string) => void) | null>(null)
+  // The little "Open" / "Close" tag that follows the mouse over a clickable part.
+  // Positioned imperatively from the pointer handlers rather than through state, so a
+  // mouse crossing the model does not re-render the viewer sixty times a second.
+  const hoverTagRef = useRef<HTMLSpanElement | null>(null)
+
   // The live renderer. It belongs to the CANVAS rather than to the model on it, so
   // it is built once per canvas and reused by every model that follows - see the
   // build effect and the retire effect that pairs with it. Null before the first
@@ -430,6 +450,10 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
     animRef.current = null
     setAnimClip(null)
     setAnimOpen(false)
+    partsRef.current = null
+    pressPartRef.current = null
+    setParts(null)
+    setPartsOpen({})
     // Read here, synchronously after the previous viewer's dispose captured it -
     // the model load inside build() can take seconds, and the freshness window is
     // about the dispose-to-rebuild gap, not the download.
@@ -1024,8 +1048,15 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
         // page decided to show them, so the preference is honoured by jumping to the
         // end pose instead of by taking the control away - see onAnimateClick.
         const mixer = model.animations.length > 0 ? new AnimationMixer(model) : null
-        const anim = mixer
+        // Which of the two controls the file asks for. Marked click targets anywhere in
+        // it mean parts that open one at a time by clicking them; no markers means
+        // today's single button driving every clip together.
+        const clickToOpen = mixer !== null && hasClickTargets(model)
+        const anim = mixer && !clickToOpen
           ? createAnimationToggle({ mixer, clips: model.animations, loopOnce: three.LoopOnce })
+          : null
+        const partSet = mixer && clickToOpen
+          ? createClipSet({ mixer, root: model, clips: model.animations, loopOnce: three.LoopOnce })
           : null
         if (anim) {
           animRef.current = anim
@@ -1069,6 +1100,131 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
             ? Math.min(3, Math.max(1, open / shut))
             : 1
           controls.maxDistance = settings.maxDistance * growth
+        }
+
+        // Click-to-open parts.
+        let hoverClip: string | null = null
+        const hideHoverTag = (): void => {
+          hoverClip = null
+          canvas!.style.cursor = ''
+          const tag = hoverTagRef.current
+          if (tag) tag.hidden = true
+        }
+        let onPartPointerDown: ((e: PointerEvent) => void) | null = null
+        let onPartPointerUp: ((e: PointerEvent) => void) | null = null
+        let onPartPointerMove: ((e: PointerEvent) => void) | null = null
+        if (partSet) {
+          partsRef.current = partSet
+          setParts({ clips: partSet.clips, drawerCount: partSet.drawerCount })
+          setPartsOpen({})
+
+          // The zoom ceiling, as for the single toggle above, but measured with each
+          // clip open IN TURN and the largest taken: in a group only one can be open
+          // at once, so opening every drawer together would overstate the room an
+          // open cabinet needs.
+          const radius = (): number => {
+            const box = new three.Box3().setFromObject(model)
+            return box.getBoundingSphere(new three.Sphere()).radius
+          }
+          const shut = radius()
+          let open = shut
+          for (const clip of partSet.clips) open = Math.max(open, partSet.sampleOpenPose(clip.name, radius))
+          const growth = shut > 0 && Number.isFinite(shut) && Number.isFinite(open)
+            ? Math.min(3, Math.max(1, open / shut))
+            : 1
+          controls.maxDistance = settings.maxDistance * growth
+
+          // Every clickable part's node, so a hover raycasts against a few handles
+          // rather than the whole model on every mouse move. A handle hit is then
+          // confirmed against the whole model (see partUnder), so a handle round the
+          // back of the cabinet cannot be clicked through it.
+          const targets: Object3D[] = []
+          model.traverse((node) => { if (typeof node.userData?.p3dClip === 'string') targets.push(node) })
+          const raycaster = new three.Raycaster()
+          const ndc = new three.Vector2()
+          // An object hidden anywhere up its chain draws nothing, so it must not catch
+          // a click either - three's raycast does not check visibility for us.
+          const isShown = (o: Object3D): boolean => {
+            for (let n: Object3D | null = o; n; n = n.parent) if (!n.visible) return false
+            return true
+          }
+          const firstShownHit = (roots: Object3D[]): Object3D | null => {
+            for (const hit of raycaster.intersectObjects(roots, true)) if (isShown(hit.object)) return hit.object
+            return null
+          }
+          const partUnder = (e: PointerEvent): string | null => {
+            const rect = canvas!.getBoundingClientRect()
+            if (rect.width === 0 || rect.height === 0) return null
+            ndc.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1)
+            raycaster.setFromCamera(ndc, camera)
+            const candidate = clipForHit(firstShownHit(targets), model)
+            if (!candidate) return null
+            return clipForHit(firstShownHit([model]), model) === candidate ? candidate : null
+          }
+
+          // The tag beside the cursor: "Open" or "Close", for the part under it.
+          const showHoverTag = (clip: string, e: PointerEvent): void => {
+            hoverClip = clip
+            canvas!.style.cursor = 'pointer'
+            const tag = hoverTagRef.current
+            const rect = host!.getBoundingClientRect()
+            if (!tag) return
+            tag.textContent = hoverLabel(partSet.isOpen(clip))
+            tag.style.transform = `translate(${Math.round(e.clientX - rect.left + 14)}px, ${Math.round(e.clientY - rect.top + 16)}px)`
+            tag.hidden = false
+          }
+
+          pressPartRef.current = (clip: string) => {
+            // Read per press, as onAnimateClick does: the preference can change under
+            // an open page. A reduced-motion click lands on the end pose, and so does
+            // the drawer it closes.
+            const instant = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+            partSet.press(clip, instant)
+            setPartsOpen(Object.fromEntries(partSet.clips.map((c) => [c.name, partSet.isOpen(c.name)])))
+            // Flips under a still mouse straight away, rather than on its next move.
+            const tag = hoverTagRef.current
+            if (tag && hoverClip !== null) tag.textContent = hoverLabel(partSet.isOpen(hoverClip))
+            invalidate()
+          }
+
+          // A click, not a drag: the press is only a click if the pointer barely moved
+          // between down and up, so turning the model never opens a drawer by
+          // accident. Touch follows the same rule - a tap is a click, a swipe is not.
+          const CLICK_SLOP_PX = 6
+          let downId: number | null = null
+          let downX = 0
+          let downY = 0
+          onPartPointerDown = (e) => {
+            // Anything pressed ends the hover: a drag to orbit is starting, or a click
+            // is about to change what the tag would say.
+            hideHoverTag()
+            if (!e.isPrimary || e.button !== 0) { downId = null; return }
+            downId = e.pointerId
+            downX = e.clientX
+            downY = e.clientY
+          }
+          onPartPointerUp = (e) => {
+            if (downId !== e.pointerId) return
+            downId = null
+            if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_SLOP_PX) return
+            const clip = partUnder(e)
+            if (!clip) return
+            pressPartRef.current?.(clip)
+            if (e.pointerType !== 'touch') showHoverTag(clip, e)
+          }
+          onPartPointerMove = (e) => {
+            // Mouse and pen only: touch has no hover, and the accessible buttons cover
+            // it. Nothing while a button is held - that is a drag, not a hover.
+            if (e.pointerType === 'touch' || e.buttons !== 0) return
+            const clip = partUnder(e)
+            if (clip) showHoverTag(clip, e)
+            else if (hoverClip !== null) hideHoverTag()
+          }
+          canvas!.addEventListener('pointerdown', onPartPointerDown)
+          canvas!.addEventListener('pointerup', onPartPointerUp)
+          canvas!.addEventListener('pointermove', onPartPointerMove)
+          canvas!.addEventListener('pointerleave', hideHoverTag)
+          controls.addEventListener('start', hideHoverTag)
         }
         // Real elapsed time, not a per-frame constant: a dropped frame on a slow
         // device should cost smoothness, not leave the socket travelling in slow
@@ -1116,6 +1272,11 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
             // and handing the mixer half a minute in one go would fast-forward the
             // clip to wherever it had got to unwatched instead of resuming it.
             if (anim.update(Math.min(clock.getDelta(), 0.1))) invalidate()
+          }
+          // The click-to-open parts, on the same clamped clock and the same rule: a
+          // set with every part at rest asks for no frame at all.
+          if (partSet && clock) {
+            if (partSet.update(Math.min(clock.getDelta(), 0.1))) invalidate()
           }
           // The model-spin path: the idle turn, or the glide left over from a drag.
           // The light and the shadow-catcher plane are scene-level and never move,
@@ -1207,6 +1368,14 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           mixer?.stopAllAction()
           mixer?.uncacheRoot(model)
           animRef.current = null
+          if (onPartPointerDown) canvas!.removeEventListener('pointerdown', onPartPointerDown)
+          if (onPartPointerUp) canvas!.removeEventListener('pointerup', onPartPointerUp)
+          if (onPartPointerMove) canvas!.removeEventListener('pointermove', onPartPointerMove)
+          canvas!.removeEventListener('pointerleave', hideHoverTag)
+          controls.removeEventListener('start', hideHoverTag)
+          hideHoverTag()
+          partsRef.current = null
+          pressPartRef.current = null
           observer.disconnect()
           // Connected for the whole life of the viewer: it is what parks the loop when
           // the stage scrolls out of view and restarts it when it comes back.
@@ -1640,6 +1809,38 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           {animationLabel(animClip, animOpen)}
         </button>
       )}
+      {/* Click-to-open parts. The clicks themselves are invisible to a keyboard and
+          to a screen reader, so every part also gets a real button here, kept in step
+          with the mouse through partsOpen. Out of sight until something inside takes
+          focus, so a mouse shopper sees a clean stage and a keyboard one sees the row
+          the moment they tab into it - unless some clip has no click target at all,
+          in which case these are its only control and stay on screen. */}
+      {status === 'ready' && parts !== null && (
+        <div
+          className={`p3d-parts${parts.clips.some((c) => !c.clickable) ? ' p3d-parts-shown' : ''}`}
+          role="group"
+          aria-label="Open and close parts of the model"
+        >
+          {parts.clips.map((clip) => {
+            const isOpen = partsOpen[clip.name] === true
+            return (
+              <button
+                key={clip.name}
+                type="button"
+                className="p3d-part"
+                aria-pressed={isOpen}
+                onClick={() => pressPartRef.current?.(clip.name)}
+              >
+                {partLabel(clip, parts.drawerCount, isOpen)}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {/* The tag that follows the mouse over a clickable part. aria-hidden: it is for
+          sighted mouse users, and a screen reader has the buttons above instead.
+          Shown, moved and worded by the pointer handlers in build(). */}
+      <span ref={hoverTagRef} className="p3d-hover-tag" aria-hidden="true" hidden />
       {/* "View in your room": shown only where the device has a working AR path for
           this model and the owner has left AR on. Two shapes behind one look. The
           WebXR path is a real button that starts an immersive session in this very

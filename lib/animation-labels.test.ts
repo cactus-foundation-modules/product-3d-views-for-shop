@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { animationLabel } from '@/modules/product-3d-views-for-shop/lib/animation-labels'
+import { animationLabel, hoverLabel, partLabel } from '@/modules/product-3d-views-for-shop/lib/animation-labels'
 
 // The button's text is its accessible name, so these strings are what a screen
 // reader reads out - which makes "it says the right thing in the right state" an
@@ -28,5 +28,28 @@ describe('the 3D animation control’s wording', () => {
   it('still says something for a clip with no name at all', () => {
     expect(animationLabel('', false)).toBe('Play animation')
     expect(animationLabel('', true)).toBe('Reverse animation')
+  })
+})
+
+describe('the click-to-open wording', () => {
+  it('offers the opposite of where the part is heading on hover', () => {
+    expect(hoverLabel(false)).toBe('Open')
+    expect(hoverLabel(true)).toBe('Close')
+  })
+
+  it('names marked drawers by position, top first', () => {
+    const names = (count: number): string[] =>
+      Array.from({ length: count }, (_, i) => partLabel({ name: `Drawer${i + 1}Open`, drawer: i + 1 }, count, false))
+    expect(names(2)).toEqual(['Open the top drawer', 'Open the bottom drawer'])
+    expect(names(3)).toEqual(['Open the top drawer', 'Open the middle drawer', 'Open the bottom drawer'])
+    expect(names(4)).toEqual(['Open the top drawer', 'Open the second drawer', 'Open the third drawer', 'Open the bottom drawer'])
+    expect(partLabel({ name: 'Drawer1Open', drawer: 1 }, 2, true)).toBe('Close the top drawer')
+  })
+
+  it('falls back to the clip name, without guessing a verb it was not given', () => {
+    expect(partLabel({ name: 'Drawer1Open', drawer: null }, 0, false)).toBe('Open drawer 1')
+    expect(partLabel({ name: 'lid_open', drawer: null }, 0, true)).toBe('Close lid')
+    expect(partLabel({ name: 'DoorsOpen', drawer: null }, 0, false)).toBe('Open the doors')
+    expect(partLabel({ name: 'ColumnUp', drawer: null }, 0, false)).toBe('Play animation: column up')
   })
 })
