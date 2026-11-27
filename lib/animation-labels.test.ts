@@ -58,4 +58,9 @@ describe('the click-to-open wording', () => {
     expect(partLabel({ name: 'LeftDoorOpen', drawer: null }, 0, true)).toBe('Close the left door')
     expect(partLabel({ name: 'RightDoorOpen', drawer: null }, 0, false)).toBe('Open the right door')
   })
+
+  it('names twin cupboards\' four doors by cupboard and side', () => {
+    expect(partLabel({ name: 'LeftCupboardRightDoorOpen', drawer: null }, 0, false)).toBe('Open the right door of the left cupboard')
+    expect(partLabel({ name: 'RightCupboardLeftDoorOpen', drawer: null }, 0, true)).toBe('Close the left door of the right cupboard')
+  })
 })

@@ -18,6 +18,12 @@ const WORDING: Record<string, { open: string; close: string }> = {
   // leaf, so each gets its own button. Left and right are the shopper's, facing it.
   leftdooropen: { open: 'Open the left door', close: 'Close the left door' },
   rightdooropen: { open: 'Open the right door', close: 'Close the right door' },
+  // Twin cupboards side by side in one model: four leaves, so each is named for its
+  // cupboard as well. Left and right are, again, the shopper's own.
+  leftcupboardleftdooropen: { open: 'Open the left door of the left cupboard', close: 'Close the left door of the left cupboard' },
+  leftcupboardrightdooropen: { open: 'Open the right door of the left cupboard', close: 'Close the right door of the left cupboard' },
+  rightcupboardleftdooropen: { open: 'Open the left door of the right cupboard', close: 'Close the left door of the right cupboard' },
+  rightcupboardrightdooropen: { open: 'Open the right door of the right cupboard', close: 'Close the right door of the right cupboard' },
 }
 
 // The pair for a clip nobody has named yet. Deliberately dull: a fallback that
