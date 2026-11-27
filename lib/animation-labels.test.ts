@@ -52,4 +52,10 @@ describe('the click-to-open wording', () => {
     expect(partLabel({ name: 'DoorsOpen', drawer: null }, 0, false)).toBe('Open the doors')
     expect(partLabel({ name: 'ColumnUp', drawer: null }, 0, false)).toBe('Play animation: column up')
   })
+
+  it('names a cupboard\'s two doors separately', () => {
+    expect(partLabel({ name: 'LeftDoorOpen', drawer: null }, 0, false)).toBe('Open the left door')
+    expect(partLabel({ name: 'LeftDoorOpen', drawer: null }, 0, true)).toBe('Close the left door')
+    expect(partLabel({ name: 'RightDoorOpen', drawer: null }, 0, false)).toBe('Open the right door')
+  })
 })

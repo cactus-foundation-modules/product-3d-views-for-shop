@@ -14,6 +14,10 @@ const WORDING: Record<string, { open: string; close: string }> = {
   // The obvious first one: a cupboard, a wardrobe, a sideboard. Any file whose clip
   // is called DoorsOpen gets this, whoever authored it and whatever it is on.
   doorsopen: { open: 'Open the doors', close: 'Close the doors' },
+  // A pair of doors that open on their own, each by clicking its handle: one clip a
+  // leaf, so each gets its own button. Left and right are the shopper's, facing it.
+  leftdooropen: { open: 'Open the left door', close: 'Close the left door' },
+  rightdooropen: { open: 'Open the right door', close: 'Close the right door' },
 }
 
 // The pair for a clip nobody has named yet. Deliberately dull: a fallback that

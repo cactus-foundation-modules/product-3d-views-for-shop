@@ -55,11 +55,11 @@ export type ClipSet = {
   /** Advance by a real elapsed delta in seconds; true when the picture changed. */
   update: (delta: number) => boolean
   /**
-   * Put the model in the pose with ONLY `clip` open, hand it to `measure`, and put
-   * every clip back exactly where it was - within one call, nothing drawn between.
-   * Build time only, while nothing is in flight.
+   * Put the model in the pose with ONLY `clip` open (or, given several names, only
+   * those), hand it to `measure`, and put every clip back exactly where it was -
+   * within one call, nothing drawn between. Build time only, while nothing is in flight.
    */
-  sampleOpenPose: <T>(clip: string, measure: () => T) => T
+  sampleOpenPose: <T>(clip: string | string[], measure: () => T) => T
 }
 
 const CLIP_KEY = 'p3dClip'
@@ -140,6 +140,27 @@ export function describeClips(root: Object3D, clips: AnimationClip[]): { clips: 
       drawer: clipDrawerNumber(clip, root),
     })),
   }
+}
+
+/**
+ * The widest poses a shopper can actually reach, as lists of clip names to hold open
+ * together: every ungrouped clip (a pair of doors can both stand open) plus ONE clip
+ * from each exclusive group (a cabinet only ever has one drawer out). The zoom ceiling
+ * is measured on these, so it leaves room for both doors without also pretending that
+ * every drawer is out at once. Several groups multiply out, capped so a pathological
+ * file cannot make the build-time measuring slow.
+ */
+export function reachablePoses(clips: ClipInfo[]): string[][] {
+  const free = clips.filter((c) => c.group === null).map((c) => c.name)
+  const groups = new Map<string, string[]>()
+  for (const c of clips) if (c.group !== null) groups.set(c.group, [...(groups.get(c.group) ?? []), c.name])
+  let poses: string[][] = [free]
+  for (const members of groups.values()) {
+    const next = poses.flatMap((pose) => members.map((m) => [...pose, m]))
+    if (next.length > 64) break
+    poses = next
+  }
+  return poses.filter((pose) => pose.length > 0)
 }
 
 export type ClipSetDeps = {
@@ -268,7 +289,8 @@ export function createClipSet({ mixer, root, clips, loopOnce }: ClipSetDeps): Cl
 
     sampleOpenPose: (name, measure) => {
       const savedPending = new Map(pending)
-      const saved = [...actions].map(([clip, action]) => ({ action, time: action.time, paused: action.paused, open: clip === name }))
+      const wanted = new Set(typeof name === 'string' ? [name] : name)
+      const saved = [...actions].map(([clip, action]) => ({ action, time: action.time, paused: action.paused, open: wanted.has(clip) }))
       for (const s of saved) {
         s.action.paused = true
         s.action.time = s.open ? s.action.getClip().duration : 0

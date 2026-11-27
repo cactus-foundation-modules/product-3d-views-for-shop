@@ -21,7 +21,7 @@ import { addLights, addShadowCatcher, applyFabricPaint, applyMaxAnisotropy, disp
 import { detectArSupport, bakeUsdzUrl, startWebXrAr, type ArKind } from '@/modules/product-3d-views-for-shop/lib/three/ar'
 import { nudgeStep } from '@/modules/product-3d-views-for-shop/lib/nudge'
 import { createAnimationToggle, type AnimationToggle } from '@/modules/product-3d-views-for-shop/lib/three/animation-toggle'
-import { createClipSet, clipForHit, hasClickTargets, type ClipInfo, type ClipSet } from '@/modules/product-3d-views-for-shop/lib/three/clip-set'
+import { createClipSet, clipForHit, hasClickTargets, reachablePoses, type ClipInfo, type ClipSet } from '@/modules/product-3d-views-for-shop/lib/three/clip-set'
 import { animationLabel, hoverLabel, partLabel } from '@/modules/product-3d-views-for-shop/lib/animation-labels'
 import type { FabricBundle, P3dItem } from '@/modules/product-3d-views-for-shop/lib/types'
 import type { P3dConfig } from '@/modules/product-3d-views-for-shop/lib/config'
@@ -1118,17 +1118,17 @@ export function Viewer3d({ item, settings, fabric, fabricPending, captureRef }: 
           setParts({ clips: partSet.clips, drawerCount: partSet.drawerCount })
           setPartsOpen({})
 
-          // The zoom ceiling, as for the single toggle above, but measured with each
-          // clip open IN TURN and the largest taken: in a group only one can be open
-          // at once, so opening every drawer together would overstate the room an
-          // open cabinet needs.
+          // The zoom ceiling, as for the single toggle above, but measured on the widest
+          // poses a shopper can actually reach (see reachablePoses): in a group only one
+          // clip is open at once, so opening every drawer together would overstate the
+          // room an open cabinet needs, while two ungrouped doors CAN both be open.
           const radius = (): number => {
             const box = new three.Box3().setFromObject(model)
             return box.getBoundingSphere(new three.Sphere()).radius
           }
           const shut = radius()
           let open = shut
-          for (const clip of partSet.clips) open = Math.max(open, partSet.sampleOpenPose(clip.name, radius))
+          for (const pose of reachablePoses(partSet.clips)) open = Math.max(open, partSet.sampleOpenPose(pose, radius))
           const growth = shut > 0 && Number.isFinite(shut) && Number.isFinite(open)
             ? Math.min(3, Math.max(1, open / shut))
             : 1

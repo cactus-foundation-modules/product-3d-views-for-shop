@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { AnimationClip, AnimationMixer, Group, LoopOnce, Mesh, Object3D, VectorKeyframeTrack } from 'three'
-import { clipForHit, createClipSet, describeClips, hasClickTargets, type ClipSet } from '@/modules/product-3d-views-for-shop/lib/three/clip-set'
+import { clipForHit, createClipSet, describeClips, hasClickTargets, reachablePoses, type ClipSet } from '@/modules/product-3d-views-for-shop/lib/three/clip-set'
 
 // Against a real three mixer, for the same reason as animation-toggle.test.ts: what
 // can go wrong is three's own behaviour (clamping, reversing, one shared mixer tick),
@@ -300,6 +300,26 @@ describe('the click-to-open clip set', () => {
     expect(z(c.drawers[2]!)).toBe(0)
   })
 
+  it('lets ungrouped parts (a pair of doors) stand open together, and samples them together', () => {
+    const c = cabinet(2, null)
+    const set = setFor(c)
+    set.press('Drawer1Open', false)
+    set.press('Drawer2Open', false)
+    runToRest(set)
+    expect(z(c.drawers[0]!)).toBeCloseTo(TRAVEL, 5)
+    expect(z(c.drawers[1]!)).toBeCloseTo(TRAVEL, 5)
+    set.press('Drawer1Open', false)
+    runToRest(set)
+    expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[1]!)).toBeCloseTo(TRAVEL, 5)
+
+    const seen = set.sampleOpenPose(['Drawer1Open', 'Drawer2Open'], () => c.drawers.map(z))
+    expect(seen[0]).toBeCloseTo(TRAVEL, 5)
+    expect(seen[1]).toBeCloseTo(TRAVEL, 5)
+    expect(z(c.drawers[0]!)).toBeCloseTo(0, 5)
+    expect(z(c.drawers[1]!)).toBeCloseTo(TRAVEL, 5)
+  })
+
   it('restores the pose even when the measurement throws', () => {
     const c = cabinet(2)
     const set = setFor(c)
@@ -349,5 +369,27 @@ describe('the click-to-open clip set', () => {
     const set = setFor(cabinet(1))
     expect(set.press('Nope', false)).toBe(false)
     expect(set.isOpen('Nope')).toBe(false)
+  })
+})
+
+describe('the widest poses a shopper can reach', () => {
+  const clip = (name: string, group: string | null) => ({ name, group, clickable: true, drawer: null })
+
+  it('holds every ungrouped clip open together: both doors', () => {
+    expect(reachablePoses([clip('LeftDoorOpen', null), clip('RightDoorOpen', null)])).toEqual([['LeftDoorOpen', 'RightDoorOpen']])
+  })
+
+  it('holds one clip per group: a cabinet has one drawer out, not all of them', () => {
+    const drawers = [clip('Drawer1Open', 'drawers'), clip('Drawer2Open', 'drawers'), clip('Drawer3Open', 'drawers')]
+    expect(reachablePoses(drawers)).toEqual([['Drawer1Open'], ['Drawer2Open'], ['Drawer3Open']])
+  })
+
+  it('combines the two: ungrouped doors stay open under each drawer pose', () => {
+    const poses = reachablePoses([clip('LeftDoorOpen', null), clip('Drawer1Open', 'd'), clip('Drawer2Open', 'd')])
+    expect(poses).toEqual([['LeftDoorOpen', 'Drawer1Open'], ['LeftDoorOpen', 'Drawer2Open']])
+  })
+
+  it('has nothing to measure for a file with no clips', () => {
+    expect(reachablePoses([])).toEqual([])
   })
 })
